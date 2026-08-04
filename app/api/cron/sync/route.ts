@@ -1,7 +1,7 @@
 import { buildDashboard } from "@/lib/analytics";
 import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
-import { getState, saveState } from "@/lib/store";
+import { getState, saveState, withStateLock } from "@/lib/store";
 import { scanTrends, syncYouTube } from "@/lib/youtube-v2";
 
 export const dynamic = "force-dynamic";
@@ -19,37 +19,40 @@ export async function GET(request: Request) {
   }
 
   try {
-    let state = await getState();
-    if (!state.auth.connected) {
-      return Response.json({
-        skipped: true,
-        reason: "YouTube bağlantısı bekleniyor",
-        dashboard: buildDashboard(state),
-      });
-    }
-
-    state = await syncYouTube();
-    const trendAge = state.sync.lastTrendScan
-      ? Date.now() - new Date(state.sync.lastTrendScan).getTime()
-      : Number.POSITIVE_INFINITY;
-    if (trendAge > 24 * 60 * 60_000) {
-      try {
-        state = await scanTrends();
-      } catch (error) {
-        console.error("Trend taraması ana senkronu engellemeden atlandı.", error);
+    return await withStateLock("youtube-sync", async () => {
+      let state = await getState();
+      if (!state.auth.connected) {
+        return Response.json({
+          skipped: true,
+          reason: "YouTube bağlantısı bekleniyor",
+          dashboard: buildDashboard(state),
+        });
       }
-    }
 
-    const weeklySchedule = buildAdaptiveWeeklySchedule(state);
-    state = {
-      ...state,
-      plan: generateMonthlyPlan(state, weeklySchedule),
-      planning: planReviewStamp(weeklySchedule),
-    };
-    await saveState(state);
-    return Response.json({ skipped: false, dashboard: buildDashboard(state) });
+      state = await syncYouTube();
+      const trendAge = state.sync.lastTrendScan
+        ? Date.now() - new Date(state.sync.lastTrendScan).getTime()
+        : Number.POSITIVE_INFINITY;
+      if (trendAge > 24 * 60 * 60_000) {
+        try {
+          state = await scanTrends();
+        } catch (error) {
+          console.error("Trend taraması ana senkronu engellemeden atlandı.", error);
+        }
+      }
+
+      const weeklySchedule = buildAdaptiveWeeklySchedule(state);
+      state = {
+        ...state,
+        plan: generateMonthlyPlan(state, weeklySchedule),
+        planning: planReviewStamp(weeklySchedule),
+      };
+      await saveState(state);
+      return Response.json({ skipped: false, dashboard: buildDashboard(state) });
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Cron senkronu başarısız.";
-    return Response.json({ error: message }, { status: 500 });
+    const status = message.includes("zaten çalışıyor") ? 409 : 500;
+    return Response.json({ error: message }, { status });
   }
 }
