@@ -1,4 +1,4 @@
-import { createYouTubeAuthUrl } from "@/lib/youtube";
+import { createYouTubeAuthUrl } from "@/lib/youtube-v2";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
