@@ -1,0 +1,34 @@
+name: Refresh lockfile
+
+on:
+  push:
+    branches: [agent/dependency-refresh]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/dependency-refresh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --package-lock-only --ignore-scripts
+      - run: npm audit fix --package-lock-only --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: |
+          if git diff --quiet -- package-lock.json package.json; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json package.json
+          git commit -m "Bağımlılık kilit dosyasını güvenli sürümlere yenile"
+          git push origin HEAD:agent/dependency-refresh
