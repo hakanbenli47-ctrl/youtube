@@ -2,10 +2,16 @@ import { buildDashboard } from "@/lib/analytics";
 import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
-import { scanTrends, syncYouTube } from "@/lib/youtube-v2";
+import { refreshPublicYouTubeStats, scanTrends, syncYouTube } from "@/lib/youtube-v2";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+function ageOf(value: string | null | undefined) {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? Date.now() - timestamp : Number.POSITIVE_INFINITY;
+}
 
 export async function POST(request: Request) {
   try {
@@ -21,23 +27,35 @@ export async function POST(request: Request) {
         });
       }
 
-      const lastSync = state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync;
-      const lastSyncAge = lastSync
-        ? Date.now() - new Date(lastSync).getTime()
-        : Number.POSITIVE_INFINITY;
-      const intervalMinutes = Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60);
-      if (automatic && lastSyncAge < intervalMinutes * 60_000) {
-        return Response.json({
-          skipped: true,
-          reason: "Canlı veri henüz yenileme aralığında",
-          dashboard: buildDashboard(state),
-        });
+      const fullIntervalMinutes = Math.max(15, Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60));
+      const publicIntervalMinutes = Math.max(2, Number(process.env.YOUTUBE_PUBLIC_SYNC_INTERVAL_MINUTES || 5));
+      const fullSyncDue = ageOf(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync) >=
+        fullIntervalMinutes * 60_000;
+
+      if (automatic && !fullSyncDue) {
+        const publicSyncDue = ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
+        if (publicSyncDue) {
+          state = await refreshPublicYouTubeStats(state);
+          const discoveredNewUpload = state.channel.videoCount > state.videos.length;
+          if (!discoveredNewUpload) {
+            return Response.json({
+              skipped: false,
+              lightweight: true,
+              reason: "Canlı görüntülenmeler yenilendi; ayrıntılı Analytics henüz yenileme aralığında.",
+              dashboard: buildDashboard(state),
+            });
+          }
+        } else {
+          return Response.json({
+            skipped: true,
+            reason: "Canlı veri henüz yenileme aralığında",
+            dashboard: buildDashboard(state),
+          });
+        }
       }
 
       state = await syncYouTube();
-      const trendAge = state.sync.lastTrendScan
-        ? Date.now() - new Date(state.sync.lastTrendScan).getTime()
-        : Number.POSITIVE_INFINITY;
+      const trendAge = ageOf(state.sync.lastTrendScan);
       if (!automatic || trendAge > 24 * 60 * 60_000) {
         try {
           state = await scanTrends();
@@ -53,7 +71,7 @@ export async function POST(request: Request) {
         planning: planReviewStamp(weeklySchedule),
       };
       await saveState(state);
-      return Response.json({ skipped: false, dashboard: buildDashboard(state) });
+      return Response.json({ skipped: false, lightweight: false, dashboard: buildDashboard(state) });
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Senkron başarısız.";

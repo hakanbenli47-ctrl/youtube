@@ -2,7 +2,7 @@ import "server-only";
 
 import { google } from "googleapis";
 import { detectHistoryTopic } from "./history";
-import { saveState, updateState } from "./store";
+import { getState, saveState, updateState } from "./store";
 import type { ChannelState, DailyMetric, ShortsDailyMetric, VideoMetric } from "./schema";
 import {
   DAY_MS,
@@ -21,6 +21,137 @@ import {
   durationSeconds,
 } from "./youtube-core";
 
+type PublicMetadata = {
+  title: string;
+  publishedAt: string;
+  duration: number;
+  thumbnailUrl: string;
+  views: number;
+  likes: number;
+  comments: number;
+};
+
+async function assertChannel(
+  youtube: ReturnType<typeof google.youtube>,
+) {
+  const response = await youtube.channels.list({
+    part: ["snippet", "statistics", "contentDetails"],
+    mine: true,
+  });
+  const channel = response.data.items?.[0];
+  if (!channel) throw new Error("Bağlı hesapta YouTube kanalı bulunamadı.");
+  const expected = process.env.YOUTUBE_TARGET_CHANNEL_ID?.trim();
+  if (expected && channel.id !== expected) throw new Error("Yanlış YouTube kanalı seçildi.");
+  return channel;
+}
+
+async function uploadedVideoIds(
+  youtube: ReturnType<typeof google.youtube>,
+  uploadsId: string | null | undefined,
+) {
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  if (!uploadsId) return ids;
+  do {
+    const response = await youtube.playlistItems.list({
+      part: ["contentDetails"],
+      playlistId: uploadsId,
+      maxResults: 50,
+      pageToken,
+    });
+    ids.push(...(response.data.items || [])
+      .map((item) => item.contentDetails?.videoId)
+      .filter((id): id is string => Boolean(id)));
+    pageToken = response.data.nextPageToken || undefined;
+  } while (pageToken);
+  return ids;
+}
+
+async function publicMetadata(
+  youtube: ReturnType<typeof google.youtube>,
+  ids: string[],
+) {
+  const metadata = new Map<string, PublicMetadata>();
+  for (const group of chunks(ids, 50)) {
+    if (!group.length) continue;
+    const response = await youtube.videos.list({
+      part: ["snippet", "statistics", "contentDetails"],
+      id: group,
+    });
+    for (const item of response.data.items || []) {
+      if (!item.id) continue;
+      metadata.set(item.id, {
+        title: item.snippet?.title || "Başlıksız video",
+        publishedAt: item.snippet?.publishedAt || "",
+        duration: durationSeconds(item.contentDetails?.duration),
+        thumbnailUrl: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || "",
+        views: numeric(item.statistics?.viewCount),
+        likes: numeric(item.statistics?.likeCount),
+        comments: numeric(item.statistics?.commentCount),
+      });
+    }
+  }
+  return metadata;
+}
+
+export async function refreshPublicYouTubeStats(existingState?: ChannelState) {
+  const state = existingState || await getState();
+  const auth = await authenticatedClient(state);
+  const youtube = google.youtube({ version: "v3", auth });
+  const channel = await assertChannel(youtube);
+  const ids = state.videos.map((video) => video.id);
+  const metadata = await publicMetadata(youtube, ids);
+  const videos = state.videos.map((video) => {
+    const current = metadata.get(video.id);
+    if (!current) return video;
+    return {
+      ...video,
+      title: current.title || video.title,
+      publishedAt: current.publishedAt || video.publishedAt,
+      durationSeconds: current.duration || video.durationSeconds,
+      views: Math.max(current.views, video.analyticsViews || 0),
+      publicViews: current.views,
+      likes: Math.max(current.likes, video.likes),
+      comments: Math.max(current.comments, video.comments),
+      thumbnailUrl: current.thumbnailUrl || video.thumbnailUrl,
+      topic: detectHistoryTopic(current.title || video.title),
+    };
+  });
+  const now = new Date().toISOString();
+  const updated: ChannelState = {
+    ...state,
+    channel: {
+      id: channel.id || state.channel.id,
+      title: channel.snippet?.title?.trim() || state.channel.title,
+      handle: channel.snippet?.customUrl || state.channel.handle,
+      thumbnailUrl: channel.snippet?.thumbnails?.medium?.url || channel.snippet?.thumbnails?.default?.url || state.channel.thumbnailUrl,
+      subscriberCount: numeric(channel.statistics?.subscriberCount),
+      videoCount: numeric(channel.statistics?.videoCount),
+      viewCount: numeric(channel.statistics?.viewCount),
+    },
+    totals: {
+      ...state.totals,
+      views: numeric(channel.statistics?.viewCount),
+    },
+    videos,
+    snapshots: appendSnapshot(state, videos),
+    auth: {
+      connected: true,
+      tokens: { ...(state.auth.tokens || {}), ...(auth.credentials as Record<string, unknown>) },
+    },
+    sync: {
+      ...state.sync,
+      lastPublicStatsSync: now,
+      status: "ready",
+      message: state.sync.dataThroughDate
+        ? `Canlı görüntülenmeler güncel; ayrıntılı Analytics ${state.sync.dataThroughDate} tarihine kadar.`
+        : "Canlı görüntülenmeler güncellendi; ayrıntılı Analytics senkronu bekleniyor.",
+    },
+  };
+  await saveState(updated);
+  return updated;
+}
+
 export async function syncYouTube() {
   let state = await updateState((current) => ({
     ...current,
@@ -32,60 +163,12 @@ export async function syncYouTube() {
     const youtube = google.youtube({ version: "v3", auth });
     const analytics = google.youtubeAnalytics({ version: "v2", auth });
     const warnings: string[] = [];
-    const channelResponse = await youtube.channels.list({
-      part: ["snippet", "statistics", "contentDetails"],
-      mine: true,
-    });
-    const channel = channelResponse.data.items?.[0];
-    if (!channel) throw new Error("Bağlı hesapta YouTube kanalı bulunamadı.");
-    const expected = process.env.YOUTUBE_TARGET_CHANNEL_ID?.trim();
-    if (expected && channel.id !== expected) throw new Error("Yanlış YouTube kanalı seçildi.");
-
-    const uploadsId = channel.contentDetails?.relatedPlaylists?.uploads;
-    const uploadedIds: string[] = [];
-    let pageToken: string | undefined;
-    if (uploadsId) {
-      do {
-        const response = await youtube.playlistItems.list({
-          part: ["contentDetails"],
-          playlistId: uploadsId,
-          maxResults: 50,
-          pageToken,
-        });
-        uploadedIds.push(...(response.data.items || [])
-          .map((item) => item.contentDetails?.videoId)
-          .filter((id): id is string => Boolean(id)));
-        pageToken = response.data.nextPageToken || undefined;
-      } while (pageToken);
-    }
-
-    const metadata = new Map<string, {
-      title: string;
-      publishedAt: string;
-      duration: number;
-      thumbnailUrl: string;
-      views: number;
-      likes: number;
-      comments: number;
-    }>();
-    for (const group of chunks(uploadedIds, 50)) {
-      const response = await youtube.videos.list({
-        part: ["snippet", "statistics", "contentDetails"],
-        id: group,
-      });
-      for (const item of response.data.items || []) {
-        if (!item.id) continue;
-        metadata.set(item.id, {
-          title: item.snippet?.title || "Başlıksız video",
-          publishedAt: item.snippet?.publishedAt || "",
-          duration: durationSeconds(item.contentDetails?.duration),
-          thumbnailUrl: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || "",
-          views: numeric(item.statistics?.viewCount),
-          likes: numeric(item.statistics?.likeCount),
-          comments: numeric(item.statistics?.commentCount),
-        });
-      }
-    }
+    const channel = await assertChannel(youtube);
+    const uploadedIds = await uploadedVideoIds(
+      youtube,
+      channel.contentDetails?.relatedPlaylists?.uploads,
+    );
+    const metadata = await publicMetadata(youtube, uploadedIds);
 
     const today = dateKey();
     const dailyResult = await report(analytics, {
@@ -160,15 +243,19 @@ export async function syncYouTube() {
       const analyticsViews = numeric(all.views);
       const views = Math.max(publicViews, analyticsViews);
       const engagedViews = numeric(all.engagedViews);
-      const age = Math.max(0.25, (Date.now() - new Date(meta?.publishedAt || previous?.publishedAt || Date.now()).getTime()) / DAY_MS);
+      const publishedAt = meta?.publishedAt || previous?.publishedAt || "";
+      const publishedTime = new Date(publishedAt).getTime();
+      const age = Math.max(0.25, Number.isFinite(publishedTime)
+        ? (Date.now() - publishedTime) / DAY_MS
+        : 1);
       const viewsLast7Days = numeric(seven.views);
       return {
         id,
         title: meta?.title || previous?.title || "Başlıksız video",
-        publishedAt: meta?.publishedAt || previous?.publishedAt || "",
+        publishedAt,
         durationSeconds: seconds,
-        contentType: contentType(all, seconds),
-        creatorContentType: String(all.creatorContentType || ""),
+        contentType: contentType(all, seconds, previous?.contentType),
+        creatorContentType: String(all.creatorContentType || previous?.creatorContentType || ""),
         views,
         publicViews,
         analyticsViews,
@@ -204,6 +291,7 @@ export async function syncYouTube() {
     const analyticsViews = sum(videos.map((video) => video.analyticsViews || 0));
     const engagedViews = sum(videos.map((video) => video.engagedViews || 0));
     const netSubscribers = sum(daily.map((day) => day.subscribersGained - day.subscribersLost));
+    const now = new Date().toISOString();
 
     state = {
       ...state,
@@ -231,8 +319,9 @@ export async function syncYouTube() {
       auth: { connected: true, tokens: { ...(state.auth.tokens || {}), ...(auth.credentials as Record<string, unknown>) } },
       sync: {
         ...state.sync,
-        lastYouTubeSync: new Date().toISOString(),
-        lastSuccessfulYouTubeSync: new Date().toISOString(),
+        lastYouTubeSync: now,
+        lastSuccessfulYouTubeSync: now,
+        lastPublicStatsSync: now,
         dataThroughDate,
         analyticsLagDays: lag,
         warnings,
