@@ -265,6 +265,7 @@ export type ChannelState = {
     lastStudioImport: string | null;
     lastYouTubeSync: string | null;
     lastSuccessfulYouTubeSync?: string | null;
+    lastPublicStatsSync?: string | null;
     lastTrendScan: string | null;
     dataThroughDate?: string | null;
     analyticsLagDays?: number;
