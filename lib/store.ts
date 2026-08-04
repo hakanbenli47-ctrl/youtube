@@ -1,7 +1,13 @@
 import "server-only";
 
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import path from "node:path";
 import type { ChannelState } from "./schema";
 
@@ -22,10 +28,62 @@ type RedisResponse<T> = {
   error?: string;
 };
 
+type EncryptedEnvelope = {
+  version: 1;
+  algorithm: "aes-256-gcm";
+  iv: string;
+  tag: string;
+  data: string;
+};
+
 function isoDateAfter(days: number) {
   const value = new Date();
   value.setDate(value.getDate() + days);
   return value.toISOString().slice(0, 10);
+}
+
+function encryptionKey() {
+  const secret = process.env.STATE_ENCRYPTION_KEY?.trim() ||
+    process.env.YOUTUBE_CLIENT_SECRET?.trim() ||
+    process.env.CRON_SECRET?.trim();
+  return secret ? createHash("sha256").update(secret).digest() : null;
+}
+
+function encodeState(state: ChannelState) {
+  const key = encryptionKey();
+  const plain = JSON.stringify(state);
+  if (!key) return plain;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  const envelope: EncryptedEnvelope = {
+    version: 1,
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    data: encrypted.toString("base64url"),
+  };
+  return JSON.stringify(envelope);
+}
+
+function decodeState(value: string): ChannelState {
+  const parsed = JSON.parse(value) as ChannelState | EncryptedEnvelope;
+  if (!("version" in parsed) || parsed.version !== 1 || parsed.algorithm !== "aes-256-gcm") {
+    return parsed as ChannelState;
+  }
+  const key = encryptionKey();
+  if (!key) throw new Error("Şifreli kanal verisi için STATE_ENCRYPTION_KEY veya YouTube sırrı eksik.");
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    Buffer.from(parsed.iv, "base64url"),
+  );
+  decipher.setAuthTag(Buffer.from(parsed.tag, "base64url"));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(parsed.data, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+  return JSON.parse(decrypted) as ChannelState;
 }
 
 export function persistentStorageReady() {
@@ -72,6 +130,7 @@ export function createEmptyState(): ChannelState {
       lastStudioImport: null,
       lastYouTubeSync: null,
       lastSuccessfulYouTubeSync: null,
+      lastPublicStatsSync: null,
       lastTrendScan: null,
       dataThroughDate: null,
       analyticsLagDays: 0,
@@ -128,17 +187,16 @@ async function redisCommand<T>(command: Array<string | number>): Promise<T | nul
 async function readRemoteState() {
   const stored = await redisCommand<string>(["GET", STATE_KEY]);
   if (!stored) return null;
-  return normalizeState(JSON.parse(stored) as ChannelState);
+  return normalizeState(decodeState(stored));
 }
 
 async function writeRemoteState(state: ChannelState) {
-  await redisCommand<string>(["SET", STATE_KEY, JSON.stringify(state)]);
+  await redisCommand<string>(["SET", STATE_KEY, encodeState(state)]);
 }
 
 async function readLocalState() {
   try {
-    const stored = JSON.parse(await readFile(STATE_FILE, "utf8")) as ChannelState;
-    return normalizeState(stored);
+    return normalizeState(decodeState(await readFile(STATE_FILE, "utf8")));
   } catch {
     return null;
   }
@@ -148,7 +206,7 @@ async function writeLocalState(state: ChannelState) {
   await mkdir(DATA_DIR, { recursive: true });
   const temporary = path.join(DATA_DIR, `state.${process.pid}.${randomUUID()}.tmp`);
   try {
-    await writeFile(temporary, JSON.stringify(state, null, 2), "utf8");
+    await writeFile(temporary, encodeState(state), "utf8");
     await copyFile(temporary, STATE_FILE);
   } finally {
     await rm(temporary, { force: true });
