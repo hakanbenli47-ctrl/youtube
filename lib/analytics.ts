@@ -1,24 +1,23 @@
 import "server-only";
 
-import type { ChannelState, DashboardData } from "./schema";
+import type { ChannelState, DashboardData, VideoMetric } from "./schema";
 import { publicState } from "./store";
 import { buildAdaptiveWeeklySchedule, currentIstanbulWeekKey, nextWeeklyReviewAt } from "./scheduling";
 import {
   baselines,
   buildPostingSlots,
   buildRepetitionAlerts,
-  buildShortsGrowthGoal,
   buildTopicInsights,
   buildWinningCombinations,
   quality,
 } from "./analytics-metrics";
+import { buildShortsGrowthGoal } from "./growth-goal";
 import {
   buildDataQuality,
   buildGrowthPlaybook,
   buildModelValidation,
   buildRecommendations,
 } from "./analytics-strategy";
-import type { VideoMetric } from "./schema";
 
 const DAY_MS = 86_400_000;
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
@@ -63,13 +62,18 @@ export function buildDashboard(state: ChannelState): DashboardData {
     ? state.totals.netSubscribers / conversionBase
     : 0.003;
   const viewsRequired = Math.ceil(subscriberGrowthRequired / Math.max(conversion, 0.0001));
-  const projected30DaySubscribers = Math.round(last7Subscribers / 7 * 30);
+  const observedDays = Math.max(1, Math.min(7, last7.length));
+  const projected30DaySubscribers = Math.round(last7Subscribers / observedDays * 30);
   const requiredMonthlySubscribers = subscriberGrowthRequired / daysRemaining * 30;
   const ratio = requiredMonthlySubscribers > 0 ? projected30DaySubscribers / requiredMonthlySubscribers : 1;
 
   const grouped = new Map<string, { name: string; views: number; subscribers: number; watchHours: number }>();
   for (const video of state.videos) {
-    const name = video.contentType === "SHORT" ? "Shorts" : "Uzun Video";
+    const name = video.contentType === "SHORT"
+      ? "Shorts"
+      : video.contentType === "LONG"
+        ? "Uzun Video"
+        : "Türü doğrulanıyor";
     const row = grouped.get(name) || { name, views: 0, subscribers: 0, watchHours: 0 };
     row.views += video.views;
     row.subscribers += netSubscribers(video);
@@ -128,7 +132,7 @@ export function buildDashboard(state: ChannelState): DashboardData {
     setup: {
       youtubeCredentialsReady: Boolean(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
       hasChannelData: Boolean(state.videos.length || state.sync.lastYouTubeSync || state.sync.lastStudioImport),
-      dataSource: state.auth.connected && state.sync.lastYouTubeSync
+      dataSource: state.auth.connected && (state.sync.lastYouTubeSync || state.sync.lastPublicStatsSync)
         ? "live"
         : state.sync.lastStudioImport
           ? "studio"
