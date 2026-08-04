@@ -1,5 +1,5 @@
 import { buildDashboard } from "@/lib/analytics";
-import { scanTrends } from "@/lib/youtube";
+import { scanTrends } from "@/lib/youtube-v2";
 
 export async function POST() {
   try {
