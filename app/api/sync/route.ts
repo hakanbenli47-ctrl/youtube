@@ -1,4 +1,5 @@
 import { buildDashboard } from "@/lib/analytics";
+import { restoreAuthFromRequest } from "@/lib/auth-cookie";
 import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
@@ -19,7 +20,11 @@ export async function POST(request: Request) {
       const url = new URL(request.url);
       const automatic = url.searchParams.get("auto") === "1";
       let state = await getState();
-      if (!state.auth.connected) {
+      const restored = restoreAuthFromRequest(state, request);
+      state = restored.state;
+      if (restored.restored) await saveState(state);
+
+      if (!state.auth.connected || !state.auth.tokens) {
         return Response.json({
           skipped: true,
           reason: "YouTube bağlantısı bekleniyor",
@@ -27,13 +32,21 @@ export async function POST(request: Request) {
         });
       }
 
-      const fullIntervalMinutes = Math.max(15, Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60));
-      const publicIntervalMinutes = Math.max(2, Number(process.env.YOUTUBE_PUBLIC_SYNC_INTERVAL_MINUTES || 5));
-      const fullSyncDue = ageOf(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync) >=
+      const fullIntervalMinutes = Math.max(
+        15,
+        Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60),
+      );
+      const publicIntervalMinutes = Math.max(
+        2,
+        Number(process.env.YOUTUBE_PUBLIC_SYNC_INTERVAL_MINUTES || 5),
+      );
+      const fullSyncDue =
+        ageOf(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync) >=
         fullIntervalMinutes * 60_000;
 
       if (automatic && !fullSyncDue) {
-        const publicSyncDue = ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
+        const publicSyncDue =
+          ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
         if (publicSyncDue) {
           state = await refreshPublicYouTubeStats(state);
           const discoveredNewUpload = state.channel.videoCount > state.videos.length;
@@ -71,7 +84,11 @@ export async function POST(request: Request) {
         planning: planReviewStamp(weeklySchedule),
       };
       await saveState(state);
-      return Response.json({ skipped: false, lightweight: false, dashboard: buildDashboard(state) });
+      return Response.json({
+        skipped: false,
+        lightweight: false,
+        dashboard: buildDashboard(state),
+      });
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Senkron başarısız.";
