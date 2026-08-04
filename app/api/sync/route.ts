@@ -1,8 +1,11 @@
 import { buildDashboard } from "@/lib/analytics";
 import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
-import { buildAdaptiveWeeklySchedule, currentIstanbulWeekKey } from "@/lib/scheduling";
+import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState } from "@/lib/store";
-import { scanTrends, syncYouTube } from "@/lib/youtube";
+import { scanTrends, syncYouTube } from "@/lib/youtube-v2";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
@@ -10,17 +13,23 @@ export async function POST(request: Request) {
     const automatic = url.searchParams.get("auto") === "1";
     let state = await getState();
     if (!state.auth.connected) {
-      return Response.json(
-        { skipped: true, reason: "YouTube bağlantısı bekleniyor", dashboard: buildDashboard(state) },
-      );
+      return Response.json({
+        skipped: true,
+        reason: "YouTube bağlantısı bekleniyor",
+        dashboard: buildDashboard(state),
+      });
     }
 
-    const lastSyncAge = state.sync.lastYouTubeSync
-      ? Date.now() - new Date(state.sync.lastYouTubeSync).getTime()
+    const lastSyncAge = state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync
+      ? Date.now() - new Date(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync || 0).getTime()
       : Number.POSITIVE_INFINITY;
-    const intervalMinutes = Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 360);
+    const intervalMinutes = Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60);
     if (automatic && lastSyncAge < intervalMinutes * 60_000) {
-      return Response.json({ skipped: true, reason: "Henüz yenileme zamanı değil" });
+      return Response.json({
+        skipped: true,
+        reason: "Canlı veri henüz yenileme aralığında",
+        dashboard: buildDashboard(state),
+      });
     }
 
     state = await syncYouTube();
@@ -30,15 +39,17 @@ export async function POST(request: Request) {
     if (!automatic || trendAge > 24 * 60 * 60_000) {
       try {
         state = await scanTrends();
-      } catch {
-        // Kanal verisi senkronu başarılıysa trend kotası hatası ana akışı bozmaz.
+      } catch (error) {
+        console.error("Trend taraması ana senkronu engellemeden atlandı.", error);
       }
     }
-    const needsWeeklyReview = state.planning?.weekKey !== currentIstanbulWeekKey() || !state.planning?.weeklySchedule;
-    if (needsWeeklyReview) {
-      const weeklySchedule = buildAdaptiveWeeklySchedule(state);
-      state = { ...state, plan: generateMonthlyPlan(state, weeklySchedule), planning: planReviewStamp(weeklySchedule) };
-    }
+
+    const weeklySchedule = buildAdaptiveWeeklySchedule(state);
+    state = {
+      ...state,
+      plan: generateMonthlyPlan(state, weeklySchedule),
+      planning: planReviewStamp(weeklySchedule),
+    };
     await saveState(state);
     return Response.json({ skipped: false, dashboard: buildDashboard(state) });
   } catch (error) {
