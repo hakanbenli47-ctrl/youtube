@@ -1,9 +1,10 @@
 import "server-only";
 
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { google } from "googleapis";
 import type { Credentials } from "google-auth-library";
 import type { youtubeAnalytics_v2 } from "googleapis";
-import { getState, saveState, updateState } from "./store";
+import { getState, saveState } from "./store";
 import type { ChannelState, MetricSnapshot, VideoMetric } from "./schema";
 
 export const DAY_MS = 86_400_000;
@@ -12,6 +13,7 @@ const SCOPES = [
   "https://www.googleapis.com/auth/youtube.readonly",
   "https://www.googleapis.com/auth/yt-analytics.readonly",
 ];
+const OAUTH_STATE_TTL_MS = 20 * 60_000;
 type ReportParams = youtubeAnalytics_v2.Params$Resource$Reports$Query;
 type Row = Record<string, unknown>;
 
@@ -29,6 +31,45 @@ function redirectUri() {
     : "http://localhost:3000/api/auth/youtube/callback";
 }
 
+function oauthStateSecret() {
+  return process.env.OAUTH_STATE_SECRET?.trim() || requiredEnv("YOUTUBE_CLIENT_SECRET");
+}
+
+function signState(payload: string) {
+  return createHmac("sha256", oauthStateSecret()).update(payload).digest("base64url");
+}
+
+function createSignedState() {
+  const payload = Buffer.from(JSON.stringify({
+    nonce: crypto.randomUUID(),
+    issuedAt: Date.now(),
+  })).toString("base64url");
+  return `${payload}.${signState(payload)}`;
+}
+
+function verifySignedState(value: string | null) {
+  if (!value) return false;
+  const [payload, signature, extra] = value.split(".");
+  if (!payload || !signature || extra) return false;
+  const expected = Buffer.from(signState(payload));
+  const received = Buffer.from(signature);
+  if (expected.length !== received.length || !timingSafeEqual(expected, received)) return false;
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      issuedAt?: number;
+      nonce?: string;
+    };
+    return Boolean(
+      decoded.nonce &&
+      Number.isFinite(decoded.issuedAt) &&
+      Date.now() - Number(decoded.issuedAt) >= 0 &&
+      Date.now() - Number(decoded.issuedAt) <= OAUTH_STATE_TTL_MS,
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function oauthClient() {
   return new google.auth.OAuth2(
     requiredEnv("YOUTUBE_CLIENT_ID"),
@@ -38,25 +79,20 @@ export function oauthClient() {
 }
 
 export async function createYouTubeAuthUrl() {
-  const oauthState = crypto.randomUUID();
-  await updateState((state) => ({
-    ...state,
-    auth: { ...state.auth, oauthState },
-  }));
   return oauthClient().generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: true,
     scope: SCOPES,
-    state: oauthState,
+    state: createSignedState(),
   });
 }
 
 export async function exchangeYouTubeCode(code: string, returnedState: string | null) {
-  const state = await getState();
-  if (!returnedState || returnedState !== state.auth.oauthState) {
-    throw new Error("Google bağlantı doğrulaması geçersiz. Kalıcı depolamayı kontrol edip yeniden bağlan.");
+  if (!verifySignedState(returnedState)) {
+    throw new Error("Google bağlantı doğrulaması geçersiz veya süresi dolmuş. Yeniden bağlan.");
   }
+  const state = await getState();
   const client = oauthClient();
   const { tokens } = await client.getToken(code);
   const mergedTokens = { ...(state.auth.tokens || {}), ...(tokens as Record<string, unknown>) };
@@ -160,11 +196,18 @@ export function byVideo(values: Row[]) {
   return new Map(values.map((row) => [String(row.video), row]));
 }
 
-export function contentType(row: Row, seconds: number): VideoMetric["contentType"] {
+export function contentType(
+  row: Row,
+  seconds: number,
+  previous: VideoMetric["contentType"] = "UNKNOWN",
+): VideoMetric["contentType"] {
   const type = String(row.creatorContentType || "").toUpperCase();
   if (type === "SHORTS") return "SHORT";
   if (type === "VIDEO_ON_DEMAND" || type === "LIVE_STREAM") return "LONG";
-  return seconds > 0 && seconds <= 180 ? "SHORT" : seconds > 180 ? "LONG" : "UNKNOWN";
+  if (previous !== "UNKNOWN") return previous;
+  if (seconds > 180) return "LONG";
+  if (seconds > 0 && seconds <= 60) return "SHORT";
+  return "UNKNOWN";
 }
 
 export function appendSnapshot(state: ChannelState, videos: VideoMetric[]): MetricSnapshot[] {
