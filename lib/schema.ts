@@ -6,8 +6,19 @@ export type VideoMetric = {
   publishedAt: string;
   durationSeconds: number;
   contentType: ContentType;
+  creatorContentType?: string;
   views: number;
+  publicViews?: number;
+  analyticsViews?: number;
   engagedViews?: number;
+  viewsLast7Days?: number;
+  engagedViewsLast7Days?: number;
+  viewsLast28Days?: number;
+  engagedViewsLast28Days?: number;
+  shortsFeedViews?: number;
+  shortsFeedEngagedViews?: number;
+  engagedViewRate?: number;
+  recentVelocity?: number;
   watchHours: number;
   subscribersGained: number;
   subscribersLost: number;
@@ -17,8 +28,10 @@ export type VideoMetric = {
   avgViewPercentage: number;
   likes: number;
   comments: number;
+  shares?: number;
   thumbnailUrl?: string;
   topic: string;
+  dataThroughDate?: string;
 };
 
 export type DailyMetric = {
@@ -31,10 +44,25 @@ export type DailyMetric = {
   likes: number;
   comments: number;
   shares: number;
+  uniques?: number;
 };
 
 export type ShortsDailyMetric = DailyMetric & {
   contentType: "SHORTS";
+};
+
+export type VideoSnapshotMetric = {
+  views: number;
+  engagedViews: number;
+  likes: number;
+  comments: number;
+  subscribersGained: number;
+  subscribersLost: number;
+};
+
+export type MetricSnapshot = {
+  capturedAt: string;
+  videos: Record<string, VideoSnapshotMetric>;
 };
 
 export type TrendVideo = {
@@ -161,6 +189,38 @@ export type Recommendation = {
   impact: "Yüksek" | "Orta" | "Düşük";
 };
 
+export type ModelValidation = {
+  sampleSize: number;
+  holdoutSize: number;
+  pairwiseAccuracy: number;
+  topQuartileLift: number;
+  status: "YETERSİZ VERİ" | "TEST" | "ORTA" | "GÜÇLÜ";
+  note: string;
+};
+
+export type DataQuality = {
+  score: number;
+  latestAnalyticsDate: string | null;
+  analyticsLagDays: number;
+  livePublicViews: number;
+  analyticsViews: number;
+  engagedViews: number;
+  missingVideoAnalytics: number;
+  snapshots: number;
+  warnings: string[];
+};
+
+export type GrowthPlaybook = {
+  provenShare: number;
+  adjacentShare: number;
+  experimentShare: number;
+  nextActions: Array<{
+    title: string;
+    detail: string;
+    sourceVideoId?: string;
+  }>;
+};
+
 export type ChannelState = {
   channel: {
     id: string;
@@ -177,6 +237,8 @@ export type ChannelState = {
   };
   totals: {
     views: number;
+    analyticsViews?: number;
+    engagedViews?: number;
     watchHours: number;
     netSubscribers: number;
     impressions: number;
@@ -185,6 +247,7 @@ export type ChannelState = {
   videos: VideoMetric[];
   daily: DailyMetric[];
   shortsDaily: ShortsDailyMetric[];
+  snapshots?: MetricSnapshot[];
   trends: TrendVideo[];
   plan: PlanItem[];
   recommendations: Recommendation[];
@@ -201,7 +264,11 @@ export type ChannelState = {
   sync: {
     lastStudioImport: string | null;
     lastYouTubeSync: string | null;
+    lastSuccessfulYouTubeSync?: string | null;
     lastTrendScan: string | null;
+    dataThroughDate?: string | null;
+    analyticsLagDays?: number;
+    warnings?: string[];
     status: "ready" | "syncing" | "error";
     message: string;
   };
@@ -235,6 +302,9 @@ export type DashboardData = {
   weeklySchedule: WeeklyScheduleDay[];
   winningCombinations: CombinationInsight[];
   shortsGrowthGoal: ShortsGrowthGoal;
+  modelValidation: ModelValidation;
+  dataQuality: DataQuality;
+  growthPlaybook: GrowthPlaybook;
   weeklyReview: {
     weekKey: string;
     nextReviewAt: string;
