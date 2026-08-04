@@ -18,7 +18,7 @@
     "date-fns": "^4.4.0",
     "googleapis": "^173.0.0",
     "lucide-react": "^1.26.0",
-    "next": "16.2.11",
+    "next": "16.2.12",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.10.0",
@@ -32,12 +32,12 @@
     "@types/react-dom": "^19",
     "concurrently": "^10.0.3",
     "eslint": "^9",
-    "eslint-config-next": "16.2.11",
+    "eslint-config-next": "16.2.12",
     "tailwindcss": "^4",
     "typescript": "^5"
   },
   "overrides": {
-    "postcss": "8.5.22",
+    "postcss": "8.5.23",
     "sharp": "0.35.3"
   }
 }
