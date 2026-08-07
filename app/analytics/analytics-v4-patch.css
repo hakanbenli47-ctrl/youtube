@@ -1,0 +1,1 @@
+body:has(.v4-analytics-page) .global-quick-nav{display:none!important}body:has(.v4-analytics-page){background:#f4f7fb!important}.v4-analytics-page+.global-quick-nav{display:none!important}@media(max-width:760px){.v4-analytics-page{padding-bottom:env(safe-area-inset-bottom)}}
