@@ -34,7 +34,13 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="tr" className={`${geistSans.variable} ${geistMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <nav className="global-quick-nav" aria-label="Hızlı erişim">
+          <a href="/">Plan</a>
+          <a href="/analytics">Canlı analizler</a>
+        </nav>
+      </body>
     </html>
   );
 }
