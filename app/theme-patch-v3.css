@@ -1,6 +1,7 @@
-body:has(.v3-analytics-page) .global-quick-nav{display:none!important}
+body:has(.v4-analytics-page) .global-quick-nav{display:none!important}
+body:has(.v4-analytics-page){overflow-x:hidden}
 
 @media(max-width:760px){
-  body:has(.v3-analytics-page){overflow-x:hidden}
-  .v3-analytics-page{padding-bottom:env(safe-area-inset-bottom)}
+  .global-quick-nav{bottom:calc(82px + env(safe-area-inset-bottom))!important}
+  body:has(.v4-analytics-page) .v4-analytics-page{padding-bottom:env(safe-area-inset-bottom)}
 }
