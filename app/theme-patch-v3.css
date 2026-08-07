@@ -1,0 +1,6 @@
+body:has(.v3-analytics-page) .global-quick-nav{display:none!important}
+
+@media(max-width:760px){
+  body:has(.v3-analytics-page){overflow-x:hidden}
+  .v3-analytics-page{padding-bottom:env(safe-area-inset-bottom)}
+}
