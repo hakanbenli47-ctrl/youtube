@@ -1,6 +1,6 @@
 import { buildDashboard } from "@/lib/analytics";
 import { restoreAuthFromRequest } from "@/lib/auth-cookie";
-import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
+import { maybeRefreshFuturePlan } from "@/lib/plan-refresh";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
 import { refreshPublicYouTubeStats, scanTrends, syncYouTube } from "@/lib/youtube-v2";
@@ -77,12 +77,12 @@ export async function POST(request: Request) {
         }
       }
 
+      // Canlı verileri her yenilemede al; fakat konu planını oynatma.
+      // Bugünün içerikleri kilitli kalır, yarın ve sonrası yalnızca 19:00'dan
+      // sonra güncel performansla günde bir kez yeniden hesaplanır.
       const weeklySchedule = buildAdaptiveWeeklySchedule(state);
-      state = {
-        ...state,
-        plan: generateMonthlyPlan(state, weeklySchedule),
-        planning: planReviewStamp(weeklySchedule),
-      };
+      state = maybeRefreshFuturePlan(state, weeklySchedule);
+
       await saveState(state);
       return Response.json({
         skipped: false,
