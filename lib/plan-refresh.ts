@@ -48,13 +48,13 @@ export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   return !refreshedAfterCutoffToday(state, now);
 }
 
-export function rebuildFuturePlan(
+export function mergeGeneratedPlanPreservingToday(
   state: ChannelState,
+  generated: PlanItem[],
   weeklySchedule: WeeklyScheduleDay[],
   now = new Date(),
 ) {
   const today = istanbulParts(now).date;
-  const generated = generateMonthlyPlan(state, weeklySchedule);
 
   // Bugün seçilmiş içerikler varsa onları kesinlikle koru. Böylece 21:00 videosu
   // 19:00 plan güncellemesinden etkilenmez. İlk kurulumda bugünü yeni plandan al.
@@ -69,6 +69,15 @@ export function rebuildFuturePlan(
     plan: sortPlan([...todayPlan, ...futurePlan]),
     planning: planReviewStamp(weeklySchedule),
   };
+}
+
+export function rebuildFuturePlan(
+  state: ChannelState,
+  weeklySchedule: WeeklyScheduleDay[],
+  now = new Date(),
+) {
+  const generated = generateMonthlyPlan(state, weeklySchedule);
+  return mergeGeneratedPlanPreservingToday(state, generated, weeklySchedule, now);
 }
 
 export function maybeRefreshFuturePlan(
