@@ -1,5 +1,5 @@
 import { buildDashboard } from "@/lib/analytics";
-import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
+import { maybeRefreshFuturePlan } from "@/lib/plan-refresh";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
 import { scanTrends, syncYouTube } from "@/lib/youtube-v2";
@@ -42,11 +42,8 @@ export async function GET(request: Request) {
       }
 
       const weeklySchedule = buildAdaptiveWeeklySchedule(state);
-      state = {
-        ...state,
-        plan: generateMonthlyPlan(state, weeklySchedule),
-        planning: planReviewStamp(weeklySchedule),
-      };
+      state = maybeRefreshFuturePlan(state, weeklySchedule);
+
       await saveState(state);
       return Response.json({ skipped: false, dashboard: buildDashboard(state) });
     });
