@@ -38,7 +38,7 @@ export async function POST(request: Request) {
       );
       const publicIntervalMinutes = Math.max(
         2,
-        Number(process.env.YOUTUBE_PUBLIC_SYNC_INTERVAL_MINUTES || 5),
+        Number(process.env.YOUTUBE_PUBLIC_SYNC_INTERVAL_MINUTES || 2),
       );
       const fullSyncDue =
         ageOf(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync) >=
