@@ -225,10 +225,16 @@ export function appendSnapshot(state: ChannelState, videos: VideoMetric[]): Metr
   const snapshots = [...(state.snapshots || [])]
     .filter((item) => Date.now() - new Date(item.capturedAt).getTime() <= 120 * DAY_MS)
     .sort((left, right) => left.capturedAt.localeCompare(right.capturedAt));
-  if (snapshots.at(-1) && Date.now() - new Date(snapshots.at(-1)!.capturedAt).getTime() < 10 * 60_000) {
-    snapshots[snapshots.length - 1] = snapshot;
-  } else {
-    snapshots.push(snapshot);
+
+  // Önceki davranış son snapshot'ın zamanını her hafif senkronizasyonda ileri taşıdığı için
+  // sık yenilemede yeni örnek hiç oluşmayabiliyordu. Artık 3 dakikadan kısa aralıkta
+  // mevcut örnek korunur; süre dolduğunda yeni bir nokta eklenir. Böylece /dk hızı gerçek
+  // iki ayrı ölçüm arasından hesaplanabilir.
+  const last = snapshots.at(-1);
+  if (last && Date.now() - new Date(last.capturedAt).getTime() < 3 * 60_000) {
+    return snapshots.slice(-720);
   }
-  return snapshots.slice(-360);
+
+  snapshots.push(snapshot);
+  return snapshots.slice(-720);
 }
