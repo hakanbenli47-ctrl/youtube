@@ -3,7 +3,7 @@ import "server-only";
 import { generateMonthlyPlan, planReviewStamp } from "./planner";
 import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
-const PLAN_REFRESH_HOUR = 19;
+const PLAN_REFRESH_HOUR = 21;
 
 function istanbulParts(value: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -38,8 +38,9 @@ function refreshedAfterCutoffToday(state: ChannelState, now: Date) {
 
 /**
  * Konu planı canlı veri her yenilendiğinde değişmemeli.
- * Günün başlıkları o gün boyunca kilitlidir. Saat 19:00'dan sonra yalnızca
- * yarın ve sonrası, güncel performans verisiyle bir kez yeniden hesaplanır.
+ * Günün başlıkları o gün boyunca kilitlidir. Yeni 6 Shorts düzeninde son yayın
+ * 19:00 olduğu için yarın ve sonrası saat 21:00'dan sonra güncel verilerle
+ * günde bir kez yeniden hesaplanır.
  */
 export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   if (!state.plan.length) return true;
@@ -56,8 +57,8 @@ export function mergeGeneratedPlanPreservingToday(
 ) {
   const today = istanbulParts(now).date;
 
-  // Bugün seçilmiş içerikler varsa onları kesinlikle koru. Böylece 21:00 videosu
-  // 19:00 plan güncellemesinden etkilenmez. İlk kurulumda bugünü yeni plandan al.
+  // Bugün seçilmiş içerikler varsa onları kesinlikle koru. Böylece 19:00 dahil
+  // gün içindeki altı video sonradan değişmez; yalnızca yarın ve sonrası yenilenir.
   const lockedToday = state.plan.filter((item) => item.date === today);
   const todayPlan = lockedToday.length
     ? lockedToday
