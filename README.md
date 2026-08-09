@@ -1,6 +1,6 @@
 # Kronik — Tarih Kanalı Büyüme Sistemi
 
-Tarih içerikleri üreten bir YouTube kanalını yerel olarak analiz eden karar paneli.
+Tarih içerikleri üreten bir YouTube kanalını analiz eden karar paneli.
 
 ## Paneli açma
 
@@ -30,18 +30,19 @@ video yükleyemez, düzenleyemez veya silemez.
 - Son 365 günlük kanal ve video performansı
 - Tarih dönemi/olay kümelerine göre içerik portföyü
 - Benzer başlıklar ve kısa sürede fazla tekrarlanan konular
-- Geçmiş yayın zamanı ile performans arasındaki ilişkiye dayalı saat önerileri
-- Haftada iki uzun video ve dört Shorts içeren 30 günlük başlangıç planı
+- Geçmiş yayın zamanı, ilk 36 saat dağıtım hızı, tutma, beğeni ve abone dönüşümüne dayalı saat/slot gücü
+- Her gün 09:00, 11:00, 13:00, 15:00, 17:00 ve 19:00 olmak üzere 6 Shorts içeren 30 günlük plan
+- Her sabit slot için kanal verisine göre İzlenme / Abone / Beğeni amacı ataması
 - Türkiye’de son 30 günde yükselen tarih videoları
 
-YouTube Analytics API küçük resim gösterimi ve CTR bilgisini hedefli sorgularda
-sunmadığı için bu alanlar YouTube Studio ZIP dışa aktarımıyla tamamlanabilir.
+YouTube Analytics API, YouTube Studio’daki **“İzleyicileriniz ne zaman YouTube’da”** ısı haritasını doğrudan sunmaz. Bu nedenle panel aktiflik sinyali olarak kanalın gerçek geçmiş yayın sonuçlarını; aynı gün/saat çevresindeki ilk dağıtım hızı, son dönem izlenme temposu, izlenme yüzdesi, beğeni ve abone dönüşümüyle birlikte kullanır.
 
 ## Otomatik çalışma
 
-- Kanal verileri varsayılan olarak 6 saatte bir yenilenir.
-- Türkçe tarih trendleri günde bir kez taranır.
-- 30 günlük plan her senkron sonrasında yeniden hesaplanır.
+- Kanal verileri panel kullanıldıkça canlı olarak yenilenebilir.
+- Türkçe tarih trendleri düzenli olarak taranır.
+- Bugünün 6 videosu gün boyunca kilitli kalır.
+- Yarın ve sonrası plan her gün Türkiye saatiyle 21:00’da, 19:00’daki son Shorts sonrasında güncel veriye göre yeniden hesaplanır.
 
 ## İsteğe bağlı yerel yapay zekâ
 
