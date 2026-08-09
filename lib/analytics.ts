@@ -91,7 +91,7 @@ export function buildDashboard(state: ChannelState): DashboardData {
   const hydratedState = { ...state, recommendations };
   const changedSlotCount = weeklySchedule.flatMap((day) => day.shortSlots || [])
     .filter((slot) => slot.change === "Değişti").length;
-  const dailyLockSummary = "Bugünün konuları kilitli. Yarın ve sonrası her gün saat 19:00'da son izlenme, tutma, beğeni ve abone verisine göre yeniden hesaplanır.";
+  const dailyLockSummary = "Günlük düzen 6 Shorts: 09:00, 11:00, 13:00, 15:00, 17:00 ve 19:00. Bugünün konuları kilitli; yarın ve sonrası her gün saat 21:00'da son izlenme, tutma, beğeni ve abone verisine göre yeniden hesaplanır.";
 
   return {
     state: publicState(hydratedState),
@@ -127,8 +127,8 @@ export function buildDashboard(state: ChannelState): DashboardData {
       shortsAnalyzed: shorts.length,
       changedSlotCount,
       summary: `${dailyLockSummary} ${changedSlotCount
-        ? `${changedSlotCount} yayın saati yeterli kanıt oluştuğu için değişti.`
-        : "Saatleri değiştirecek kadar güçlü kanıt oluşmadı; güvenli düzen korundu."}`,
+        ? `${changedSlotCount} slotta veri rolü değişti.`
+        : "Saat omurgası sabit tutuluyor; her slotun içerik amacı ve gücü kanal verisine göre puanlanıyor."}`,
     },
     setup: {
       youtubeCredentialsReady: Boolean(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
