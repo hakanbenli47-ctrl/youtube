@@ -4,9 +4,18 @@ import type { ChannelState, VideoMetric, WeeklyScheduleDay } from "./schema";
 import { istanbulPublishParts, WEEKLY_OSMANLI_SCHEDULE } from "./history";
 
 type Objective = "İzlenme" | "Abone" | "Beğeni";
+type ScoredSlot = {
+  hour: number;
+  objective: Objective;
+  score: number;
+  sampleSize: number;
+  evidenceWeight: number;
+};
 
 const OBJECTIVES: Objective[] = ["İzlenme", "Abone", "Beğeni"];
-const CANDIDATE_HOURS = [8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+const FIXED_SHORTS_HOURS = [9, 11, 13, 15, 17, 19];
+const FIXED_SHORTS_TIMES = FIXED_SHORTS_HOURS.map((hour) => `${String(hour).padStart(2, "0")}:00`);
+const DEFAULT_OBJECTIVE_SEQUENCE: Objective[] = ["İzlenme", "Abone", "Beğeni", "İzlenme", "Abone", "Beğeni"];
 const DAY_MS = 86_400_000;
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -32,15 +41,6 @@ function median(values: number[]) {
   const ordered = [...values].sort((left, right) => left - right);
   const middle = Math.floor(ordered.length / 2);
   return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
-}
-
-function timeLabel(hour: number) {
-  return `${String(hour).padStart(2, "0")}:00`;
-}
-
-function defaultHour(day: WeeklyScheduleDay, objective: Objective) {
-  const index = OBJECTIVES.indexOf(objective);
-  return Number(day.shortsTimes[index]?.slice(0, 2) || [9, 15, 21][index]);
 }
 
 function launchViews(state: ChannelState, video: VideoMetric) {
@@ -123,16 +123,15 @@ function normalizedMetric(
   return clamp(50 * Math.sqrt(Math.max(ratio, 0)) * qualityFactor(video), 5, 100);
 }
 
-function scoreCandidate(
+function scoreSlot(
   state: ChannelState,
   videos: VideoMetric[],
   dayLabel: string,
   hour: number,
   objective: Objective,
   baseline: number,
-  fallbackHour: number,
   priors: Record<Objective, number>,
-) {
+): ScoredSlot {
   let weightedTotal = 0;
   let totalWeight = 0;
   let directSamples = 0;
@@ -154,11 +153,41 @@ function scoreCandidate(
     if (sameDay && distance <= 1) directSamples += 1;
   }
 
-  const distanceFromFallback = Math.abs(hour - fallbackHour);
-  const prior = distanceFromFallback === 0 ? 54 : distanceFromFallback <= 2 ? 48 : 40;
-  const priorWeight = 5;
-  const score = (weightedTotal + prior * priorWeight) / (totalWeight + priorWeight);
-  return { hour, score, sampleSize: directSamples, evidenceWeight: totalWeight };
+  // YouTube Analytics API, Studio'daki "izleyicileriniz ne zaman YouTube'da" ısı haritasını
+  // doğrudan vermiyor. Bu nedenle gerçek kanal geçmişindeki aynı gün/saat yayınlarının
+  // ilk dağıtım hızı ve kalite/dönüşüm sinyalleri aktiflik vekili olarak kullanılıyor.
+  const priorScore = 50;
+  const priorWeight = 4;
+  const score = (weightedTotal + priorScore * priorWeight) / (totalWeight + priorWeight);
+  return { hour, objective, score, sampleSize: directSamples, evidenceWeight: totalWeight };
+}
+
+function chooseBalancedObjectives(rowsByHour: ScoredSlot[][]) {
+  let best: { rows: ScoredSlot[]; value: number } | undefined;
+
+  function walk(index: number, counts: Record<Objective, number>, rows: ScoredSlot[], value: number) {
+    if (index === rowsByHour.length) {
+      if (OBJECTIVES.every((objective) => counts[objective] === 2) && (!best || value > best.value)) {
+        best = { rows: [...rows], value };
+      }
+      return;
+    }
+
+    for (const row of rowsByHour[index]) {
+      if (counts[row.objective] >= 2) continue;
+      const stability = row.objective === DEFAULT_OBJECTIVE_SEQUENCE[index] ? 2.5 : 0;
+      const evidenceBonus = Math.min(3, row.sampleSize * 0.45) + Math.min(2, row.evidenceWeight * 0.12);
+      counts[row.objective] += 1;
+      rows.push(row);
+      walk(index + 1, counts, rows, value + row.score + stability + evidenceBonus);
+      rows.pop();
+      counts[row.objective] -= 1;
+    }
+  }
+
+  walk(0, { İzlenme: 0, Abone: 0, Beğeni: 0 }, [], 0);
+  return best?.rows || rowsByHour.map((rows, index) =>
+    rows.find((row) => row.objective === DEFAULT_OBJECTIVE_SEQUENCE[index]) || rows[0]);
 }
 
 export function buildAdaptiveWeeklySchedule(state: ChannelState): WeeklyScheduleDay[] {
@@ -172,13 +201,15 @@ export function buildAdaptiveWeeklySchedule(state: ChannelState): WeeklySchedule
   if (shorts.length < 12) {
     return WEEKLY_OSMANLI_SCHEDULE.map((day) => ({
       ...day,
+      shortsTimes: [...FIXED_SHORTS_TIMES],
       confidence: "Test" as const,
-      shortSlots: day.shortsTimes.map((time, index) => ({
+      evidence: "Yeni 6 Shorts düzeni: 09:00'dan 19:00'a kadar iki saatte bir. Veri biriktikçe her slotun içerik amacı kanal sonuçlarına göre ayarlanır.",
+      shortSlots: FIXED_SHORTS_TIMES.map((time, index) => ({
         time,
-        objective: OBJECTIVES[index],
+        objective: DEFAULT_OBJECTIVE_SEQUENCE[index],
         score: 50,
         sampleSize: 0,
-        reason: "Saat değiştirmek için yeterli erken performans örneği yok; güvenli başlangıç düzeni korunuyor.",
+        reason: "Aynı gün/saat için yeterli kanal örneği yok; 6 videoluk güvenli başlangıç düzeni kullanılıyor.",
         change: "Test" as const,
       })),
     }));
@@ -199,70 +230,43 @@ export function buildAdaptiveWeeklySchedule(state: ChannelState): WeeklySchedule
   };
 
   return WEEKLY_OSMANLI_SCHEDULE.map((day) => {
-    const rankings = new Map<Objective, ReturnType<typeof scoreCandidate>[]>();
-    for (const objective of OBJECTIVES) {
-      const fallback = defaultHour(day, objective);
-      const rows = CANDIDATE_HOURS.map((hour) => scoreCandidate(
+    const rowsByHour = FIXED_SHORTS_HOURS.map((hour) =>
+      OBJECTIVES.map((objective) => scoreSlot(
         state,
         shorts,
         day.dayLabel,
         hour,
         objective,
         baselines[objective],
-        fallback,
         priors,
-      )).sort((left, right) => right.score - left.score);
-      rankings.set(objective, rows);
-    }
+      )));
 
-    let best: { rows: ReturnType<typeof scoreCandidate>[]; value: number } | undefined;
-    for (const view of rankings.get("İzlenme") || []) {
-      for (const subscriber of rankings.get("Abone") || []) {
-        for (const like of rankings.get("Beğeni") || []) {
-          const hours = [view.hour, subscriber.hour, like.hour];
-          const ordered = [...hours].sort((left, right) => left - right);
-          if (ordered[1] - ordered[0] < 4 || ordered[2] - ordered[1] < 4) continue;
-          const stability = OBJECTIVES.reduce((sum, objective, index) =>
-            sum + (hours[index] === defaultHour(day, objective) ? 6 : 0), 0);
-          const directEvidence = view.sampleSize + subscriber.sampleSize + like.sampleSize;
-          const evidence = view.evidenceWeight + subscriber.evidenceWeight + like.evidenceWeight;
-          const value = view.score + subscriber.score + like.score + stability +
-            Math.min(8, directEvidence) + Math.min(5, evidence / 2);
-          if (!best || value > best.value) best = { rows: [view, subscriber, like], value };
-        }
-      }
-    }
-
-    const selected = best?.rows || OBJECTIVES.map((objective) =>
-      rankings.get(objective)?.find((row) => row.hour === defaultHour(day, objective)) ||
-      rankings.get(objective)![0]);
-
+    const selected = chooseBalancedObjectives(rowsByHour);
     const slots = selected.map((row, index) => {
-      const objective = OBJECTIVES[index];
-      const fallback = defaultHour(day, objective);
-      const changed = row.hour !== fallback;
-      const enoughEvidence = row.sampleSize >= 4 && row.evidenceWeight >= 3.5;
+      const enoughEvidence = row.sampleSize >= 3 && row.evidenceWeight >= 2.5;
+      const strength = row.score >= 62 ? "güçlü" : row.score >= 52 ? "olumlu" : row.score >= 44 ? "nötr" : "zayıf";
       return {
-        time: timeLabel(row.hour),
-        objective,
+        time: FIXED_SHORTS_TIMES[index],
+        objective: row.objective,
         score: Math.round(row.score),
         sampleSize: row.sampleSize,
         reason: enoughEvidence
-          ? `${objective} amacı için aynı gün ve yakın saatteki ${row.sampleSize} doğrudan örnek, son dönem ağırlığıyla hesaplandı.`
-          : `${day.dayLabel} için doğrudan kanıt sınırlı; kanal geneli ve mevcut güvenli saat birlikte kullanıldı.`,
-        change: !enoughEvidence ? "Test" as const : changed ? "Değişti" as const : "Korundu" as const,
+          ? `${day.dayLabel} ${FIXED_SHORTS_TIMES[index]} slotu ${strength}: aynı gün/saat çevresindeki ${row.sampleSize} doğrudan Shorts örneği; ilk dağıtım hızı, tutma, beğeni ve abone dönüşümü birlikte puanlandı.`
+          : `${day.dayLabel} ${FIXED_SHORTS_TIMES[index]} için doğrudan örnek sınırlı; kanal geneli ve yakın saat performansı birlikte kullanıldı.`,
+        change: enoughEvidence ? "Korundu" as const : "Test" as const,
       };
-    }).sort((left, right) => left.time.localeCompare(right.time));
+    });
 
     const directSamples = slots.reduce((sum, slot) => sum + slot.sampleSize, 0);
+    const strongest = [...slots].sort((left, right) => right.score - left.score).slice(0, 2).map((slot) => slot.time).join(" ve ");
     return {
       ...day,
-      shortsTimes: slots.map((slot) => slot.time),
+      shortsTimes: [...FIXED_SHORTS_TIMES],
       shortSlots: slots,
-      evidence: `${shorts.length} son dönem Shorts; canlı hız, ilk 36 saat snapshotları, tutma, beğeni ve abone dönüşümü birlikte ölçüldü.`,
-      confidence: shorts.length >= 60 && directSamples >= 18
+      evidence: `${shorts.length} son dönem Shorts analiz edildi. Sabit 09:00–19:00 iki saatlik düzende bu günün en güçlü veri pencereleri ${strongest || "henüz belirleniyor"}. Studio aktiflik ısı haritası API'de olmadığı için gerçek yayın sonuçları aktiflik vekili olarak kullanıldı.`,
+      confidence: shorts.length >= 60 && directSamples >= 24
         ? "Yüksek"
-        : shorts.length >= 25 && directSamples >= 9
+        : shorts.length >= 25 && directSamples >= 12
           ? "Orta"
           : "Test",
     };
