@@ -1,7 +1,7 @@
 import { buildDashboard } from "@/lib/analytics";
 import { restoreAuthFromRequest } from "@/lib/auth-cookie";
 import { getState, saveState, withStateLock } from "@/lib/store";
-import { refreshPublicYouTubeStats, scanTrends, syncYouTube } from "@/lib/youtube-v2";
+import { bootstrapPublicYouTubeState, refreshPublicYouTubeStats, scanTrends, syncYouTube } from "@/lib/youtube-v2";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -26,6 +26,20 @@ export async function POST(request: Request) {
         return Response.json({
           skipped: true,
           reason: "YouTube bağlantısı bekleniyor",
+          dashboard: buildDashboard(state),
+        });
+      }
+
+      // Vercel yeni instance açıp /tmp durumunu kaybettiyse önce yalnızca YouTube
+      // Data API ile kanal ve tüm yüklenmiş videoların public verisini geri kur.
+      // Böylece ağır Analytics raporu veya plan hesabı panelde 0 veri görünmesini engellemez.
+      if (automatic && state.videos.length === 0) {
+        state = await bootstrapPublicYouTubeState(state);
+        return Response.json({
+          skipped: false,
+          lightweight: true,
+          bootstrapped: true,
+          reason: "Kanal verileri hızlıca geri yüklendi; ayrıntılı Analytics sonraki senkronla tamamlanacak.",
           dashboard: buildDashboard(state),
         });
       }
@@ -70,13 +84,11 @@ export async function POST(request: Request) {
       state = await syncYouTube();
 
       // Otomatik açılış senkronunda trend taraması ve 30 günlük plan hesabı yapma.
-      // Vercel geçici depodan yeni instance açtığında bu yol kanal verilerini en kısa
-      // sürede yeniden doldurur. Trend ve plan işlemleri ayrı cron/plan akışında kalır.
       if (automatic) {
         return Response.json({
           skipped: false,
           lightweight: false,
-          reason: "Kanal verileri yenilendi; plan hesabı arka plandaki ayrı akışa bırakıldı.",
+          reason: "Kanal verileri yenilendi; plan hesabı ayrı akışta çalışacak.",
           dashboard: buildDashboard(state),
         });
       }
@@ -91,7 +103,6 @@ export async function POST(request: Request) {
       }
 
       // Manuel veri yenilemede de ağır 30 günlük plan hesabını çalıştırma.
-      // Planın kendi endpoint'i ve günlük cron bu işi ayrı yürütür.
       await saveState(state);
       return Response.json({
         skipped: false,
