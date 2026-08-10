@@ -1,0 +1,44 @@
+name: Patch two minute snapshots
+
+on:
+  push:
+    paths:
+      - "automation/two-minute-patch.trigger"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch snapshot cadence and live timestamp
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          core = Path("lib/youtube-core.ts")
+          text = core.read_text()
+          old = '''  // Önceki davranış son snapshot'ın zamanını her hafif senkronizasyonda ileri taşıdığı için\n  // sık yenilemede yeni örnek hiç oluşmayabiliyordu. Artık 3 dakikadan kısa aralıkta\n  // mevcut örnek korunur; süre dolduğunda yeni bir nokta eklenir. Böylece /dk hızı gerçek\n  // iki ayrı ölçüm arasından hesaplanabilir.\n  const last = snapshots.at(-1);\n  if (last && Date.now() - new Date(last.capturedAt).getTime() < 3 * 60_000) {'''
+          new = '''  // Canlı public veriler iki dakikada bir çekiliyor. 105 saniyelik koruma,\n  // aynı turun çift yazılmasını önlerken her iki dakikalık ölçümün yeni snapshot\n  // olarak saklanmasına izin verir. Böylece saat ve hız modeli gerçek canlı değişimi izler.\n  const last = snapshots.at(-1);\n  if (last && Date.now() - new Date(last.capturedAt).getTime() < 105_000) {'''
+          if old not in text:
+              raise SystemExit("Snapshot yama noktası bulunamadı")
+          core.write_text(text.replace(old, new, 1))
+
+          page = Path("app/page.tsx")
+          text = page.read_text()
+          old = '<small>Son yenileme: {formatDate(state.sync.lastYouTubeSync || state.sync.lastStudioImport)}</small>'
+          new = '<small>Son canlı yenileme: {formatDate(state.sync.lastPublicStatsSync || state.sync.lastYouTubeSync || state.sync.lastStudioImport)}</small>'
+          if old not in text:
+              raise SystemExit("Son yenileme metni bulunamadı")
+          page.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit two minute patch
+        run: |
+          git config user.name "youtube-dashboard-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add lib/youtube-core.ts app/page.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "Canlı ölçümleri gerçek 2 dakikalık aralığa geçir"
+          git push
