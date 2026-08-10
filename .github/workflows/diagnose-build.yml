@@ -1,0 +1,40 @@
+name: Diagnose build
+
+on:
+  push:
+    paths:
+      - "automation/build-diagnose.trigger"
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Run production build and capture log
+        run: |
+          set +e
+          npm ci > automation/build-diagnostic.log 2>&1
+          CI_CODE=$?
+          if [ $CI_CODE -eq 0 ]; then
+            npm run build >> automation/build-diagnostic.log 2>&1
+            BUILD_CODE=$?
+          else
+            BUILD_CODE=$CI_CODE
+          fi
+          echo "" >> automation/build-diagnostic.log
+          echo "EXIT_CODE=$BUILD_CODE" >> automation/build-diagnostic.log
+          exit 0
+      - name: Commit diagnostic log
+        run: |
+          git config user.name "youtube-dashboard-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add automation/build-diagnostic.log
+          git commit -m "Geçici production build teşhis çıktısını kaydet"
+          git push
