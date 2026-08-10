@@ -5,6 +5,7 @@ import { tr } from "date-fns/locale";
 import { detectHistoryTopic, detectOttomanRuler, titleSimilarity } from "./history";
 import { buildAdaptiveWeeklySchedule, currentIstanbulWeekKey } from "./scheduling";
 import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
+import { audienceAffinityScore, buildViralTopicCandidates, viralDemandScore } from "./topic-sourcing";
 
 const discoveryIdeas = [
   "I. Murad Edirne’yi Neden Başkent Yaptı?",
@@ -330,25 +331,47 @@ function pickIdea(
   seed: number,
 ) {
   const libraryIndex = objective === "İzlenme" ? 0 : objective === "Abone" ? 1 : 2;
-  const isAvailable = (title: string) => !usedTitles.includes(title) && !wasAlreadyPublished(state, title);
+  const isAvailable = (title: string) =>
+    !wasAlreadyPublished(state, title) &&
+    !usedTitles.some((used) => sameCoveredTopic(title, used));
+
+  const viralIdeas = buildViralTopicCandidates(state, seed).filter((item) => isAvailable(item.title));
+  const viralByTitle = new Map(viralIdeas.map((item) => [item.title, item.viralBonus]));
   const preferredUnused = shortLibraries[libraryIndex].filter(isAvailable);
   const allUnused = [...new Set(shortLibraries.flat())].filter(isAvailable);
-  const unused = preferredUnused.length ? preferredUnused : allUnused;
-  const differentRuler = unused.filter((title) => !usedRulersToday.has(detectOttomanRuler(title)));
-  const pool = differentRuler.length ? differentRuler : unused;
+  const combined = [...new Set([
+    ...preferredUnused,
+    ...viralIdeas.map((item) => item.title),
+    ...allUnused,
+  ])];
+  const differentRuler = combined.filter((title) => !usedRulersToday.has(detectOttomanRuler(title)));
+  const pool = differentRuler.length ? differentRuler : combined;
+
   const candidates = pool
     .map((title) => {
       const performance = objectiveScore(state, title, objective);
-      const similarity = Math.max(0, ...state.videos.map((video) => titleSimilarity(title, video.title)), ...usedTitles.map((used) => titleSimilarity(title, used)));
+      const similarity = Math.max(
+        0,
+        ...state.videos.map((video) => titleSimilarity(title, video.title)),
+        ...usedTitles.map((used) => titleSimilarity(title, used)),
+      );
       const novelty = 1 - similarity;
       const testBonus = strategyMode === "Kontrollü test" ? Math.max(0, 5 - performance.samples) * 18 : 0;
       const evidenceBonus = strategyMode === "Kazananı büyüt" ? Math.min(8, performance.samples) * 8 : 0;
-      return { title, performance, score: performance.value + novelty * 35 + testBonus + evidenceBonus };
+      const viralBonus = viralByTitle.get(title) ?? viralDemandScore(state, title);
+      const audienceBonus = audienceAffinityScore(state, title);
+      return {
+        title,
+        score: performance.value + novelty * 35 + testBonus + evidenceBonus + viralBonus + audienceBonus,
+      };
     })
     .filter((candidate) => candidate.title && candidate.score > 0)
-    .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title, "tr"));
+    .sort((left, right) => right.score - left.score || left.title.localeCompare(right.title, "tr"));
+
   return candidates[seed % Math.max(1, Math.min(candidates.length, 5))]?.title
-    || unused[0]
+    || viralIdeas[0]?.title
+    || preferredUnused[0]
+    || allUnused[0]
     || shortLibraries[libraryIndex].find((title) => !wasAlreadyPublished(state, title))
     || [...new Set(shortLibraries.flat())].find((title) => !wasAlreadyPublished(state, title))
     || shortLibraries[libraryIndex][seed % shortLibraries[libraryIndex].length];
