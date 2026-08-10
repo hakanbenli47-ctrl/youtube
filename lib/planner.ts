@@ -220,6 +220,107 @@ function objectiveScore(state: ChannelState, title: string, objective: ShortObje
   return { value: average, samples: matches.length };
 }
 
+const COVERED_EVENT_RULES: Array<[string, RegExp]> = [
+  ["edirne-baskent", /edirne.*baskent|baskent.*edirne/],
+  ["fetret", /fetret/],
+  ["istanbul-fethi", /istanbul.*kusat|kusat.*istanbul|halic|gemiler?.*kara|sahi top/],
+  ["cem-sultan", /cem sultan/],
+  ["caldiran", /caldiran/],
+  ["belgrad", /belgrad/],
+  ["egri", /\begri\b/],
+  ["hacova", /hacova/],
+  ["veraset", /veraset|ekber.*ersed/],
+  ["hotin", /hotin/],
+  ["bagdat", /bagdat/],
+  ["koprulu", /koprulu/],
+  ["karlofca", /karlofca/],
+  ["patrona-lale", /patrona halil|lale devri/],
+  ["nizam-cedid", /nizam.?i cedid/],
+  ["vakai-hayriye", /yeniceri.*kaldir|vaka.?i hayriye/],
+  ["tanzimat", /tanzimat/],
+  ["islahat", /islahat fermani/],
+  ["abdulaziz-donanma", /abdulaziz.*donanma|donanma.*abdulaziz/],
+  ["v-murad-93gun", /v murad.*93|93 gun/],
+  ["abdulhamid-telgraf", /abdulhamid.*telgraf|telgraf.*abdulhamid/],
+  ["kosova", /kosova/],
+  ["ankara-timur", /ankara savasi|timur.*bayezid|bayezid.*timur/],
+  ["varna", /varna/],
+  ["otlukbeli", /otlukbeli/],
+  ["rodos", /rodos/],
+  ["inebahti", /inebahti/],
+  ["timar", /timar/],
+  ["girit", /girit savasi|kandiye/],
+  ["prut", /prut/],
+  ["kucuk-kaynarca", /kucuk kaynarca/],
+  ["kirim-savasi", /kirim savasi/],
+  ["93-harbi", /93 harbi|1877.?78/],
+  ["balkan-savaslari", /balkan savas/],
+  ["mondros", /mondros/],
+  ["fatih-olum", /fatih.*olum|fatih.*zehir|zehir.*fatih/],
+  ["kanuni-olum", /kanuni.*olum|zigetvar.*olum|son sefer.*kanuni/],
+  ["humbaraci", /humbaraci ahmed/],
+];
+
+const TOPIC_MATCH_STOP_WORDS = new Set([
+  "acaba", "ama", "asil", "bile", "bir", "bunu", "cevap", "daha", "degil", "diye",
+  "etti", "etkiledi", "gercekten", "hangi", "icin", "kadar", "kim", "mi", "miydi",
+  "nasil", "neden", "neydi", "oldu", "olarak", "osmanli", "padişah", "padisah", "sonra",
+  "sultan", "tarih", "ve", "veya",
+]);
+
+function normalizeTopicText(value: string) {
+  return value
+    .toLocaleLowerCase("tr-TR")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function coveredEventKey(title: string) {
+  const normalized = normalizeTopicText(title);
+  return COVERED_EVENT_RULES.find(([_, rule]) => rule.test(normalized))?.[0] || null;
+}
+
+function meaningfulTopicWords(title: string, ruler: string) {
+  const rulerWords = new Set(normalizeTopicText(ruler).split(/\s+/).filter(Boolean));
+  return new Set(
+    normalizeTopicText(title)
+      .split(/\s+/)
+      .filter((word) => word.length >= 3 && !TOPIC_MATCH_STOP_WORDS.has(word) && !rulerWords.has(word)),
+  );
+}
+
+function sameCoveredTopic(candidate: string, publishedTitle: string) {
+  const normalizedCandidate = normalizeTopicText(candidate);
+  const normalizedPublished = normalizeTopicText(publishedTitle);
+  if (!normalizedCandidate || !normalizedPublished) return false;
+  if (normalizedCandidate === normalizedPublished) return true;
+
+  const similarity = titleSimilarity(candidate, publishedTitle);
+  if (similarity >= 0.36) return true;
+
+  const candidateEvent = coveredEventKey(candidate);
+  const publishedEvent = coveredEventKey(publishedTitle);
+  if (candidateEvent && publishedEvent && candidateEvent === publishedEvent) return true;
+
+  const candidateRuler = detectOttomanRuler(candidate);
+  const publishedRuler = detectOttomanRuler(publishedTitle);
+  if (candidateRuler === "Diğer Osmanlı" || candidateRuler !== publishedRuler) return false;
+
+  const left = meaningfulTopicWords(candidate, candidateRuler);
+  const right = meaningfulTopicWords(publishedTitle, publishedRuler);
+  if (!left.size || !right.size) return false;
+  const shared = [...left].filter((word) => right.has(word)).length;
+  const containment = shared / Math.max(1, Math.min(left.size, right.size));
+  return shared >= 2 && containment >= 0.5;
+}
+
+function wasAlreadyPublished(state: ChannelState, title: string) {
+  return state.videos.some((video) => sameCoveredTopic(title, video.title));
+}
+
 function pickIdea(
   state: ChannelState,
   objective: ShortObjective,
@@ -229,7 +330,10 @@ function pickIdea(
   seed: number,
 ) {
   const libraryIndex = objective === "İzlenme" ? 0 : objective === "Abone" ? 1 : 2;
-  const unused = shortLibraries[libraryIndex].filter((title) => !usedTitles.includes(title));
+  const isAvailable = (title: string) => !usedTitles.includes(title) && !wasAlreadyPublished(state, title);
+  const preferredUnused = shortLibraries[libraryIndex].filter(isAvailable);
+  const allUnused = [...new Set(shortLibraries.flat())].filter(isAvailable);
+  const unused = preferredUnused.length ? preferredUnused : allUnused;
   const differentRuler = unused.filter((title) => !usedRulersToday.has(detectOttomanRuler(title)));
   const pool = differentRuler.length ? differentRuler : unused;
   const candidates = pool
@@ -245,6 +349,8 @@ function pickIdea(
     .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title, "tr"));
   return candidates[seed % Math.max(1, Math.min(candidates.length, 5))]?.title
     || unused[0]
+    || shortLibraries[libraryIndex].find((title) => !wasAlreadyPublished(state, title))
+    || [...new Set(shortLibraries.flat())].find((title) => !wasAlreadyPublished(state, title))
     || shortLibraries[libraryIndex][seed % shortLibraries[libraryIndex].length];
 }
 
