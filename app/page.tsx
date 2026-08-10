@@ -253,6 +253,15 @@ export default function Home() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    const handleLiveDashboard = (event: Event) => {
+      const dashboard = (event as CustomEvent<DashboardData>).detail;
+      if (dashboard) setData(dashboard);
+    };
+    window.addEventListener("youtube-dashboard-update", handleLiveDashboard);
+    return () => window.removeEventListener("youtube-dashboard-update", handleLiveDashboard);
+  }, []);
+
   async function runAction(name: string, endpoint: string, options?: RequestInit) {
     setBusy(name);
     setNotice("");
