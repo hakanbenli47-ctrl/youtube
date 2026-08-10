@@ -1,5 +1,6 @@
 import { buildDashboard } from "@/lib/analytics";
-import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
+import { generateChannelDrivenPlan } from "@/lib/channel-driven-plan";
+import { mergeGeneratedPlanPreservingToday } from "@/lib/plan-refresh";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState } from "@/lib/store";
 import { importStudioZip } from "@/lib/studio-import";
@@ -20,13 +21,15 @@ export async function POST(request: Request) {
     if (uploaded.size > 15 * 1024 * 1024) {
       return Response.json({ error: "ZIP dosyası 15 MB sınırını aşıyor." }, { status: 413 });
     }
+
     const current = await getState();
     let updated = importStudioZip(
       Buffer.from(await uploaded.arrayBuffer()),
       current,
     );
     const weeklySchedule = buildAdaptiveWeeklySchedule(updated);
-    updated = { ...updated, plan: generateMonthlyPlan(updated, weeklySchedule), planning: planReviewStamp(weeklySchedule) };
+    const generated = generateChannelDrivenPlan(updated, weeklySchedule);
+    updated = mergeGeneratedPlanPreservingToday(updated, generated, weeklySchedule);
     await saveState(updated);
     return Response.json(buildDashboard(updated));
   } catch (error) {
