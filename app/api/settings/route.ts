@@ -1,5 +1,6 @@
 import { buildDashboard } from "@/lib/analytics";
-import { generateMonthlyPlan, planReviewStamp } from "@/lib/planner";
+import { generateChannelDrivenPlan } from "@/lib/channel-driven-plan";
+import { mergeGeneratedPlanPreservingToday } from "@/lib/plan-refresh";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState } from "@/lib/store";
 
@@ -17,13 +18,14 @@ export async function POST(request: Request) {
     typeof body.deadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline)
       ? body.deadline
       : state.goals.deadline;
-  const weeklySchedule = buildAdaptiveWeeklySchedule(state);
-  const updated = {
+
+  const base = {
     ...state,
     goals: { subscriberTarget, deadline },
-    planning: planReviewStamp(weeklySchedule),
   };
-  updated.plan = generateMonthlyPlan(updated, weeklySchedule);
+  const weeklySchedule = buildAdaptiveWeeklySchedule(base);
+  const generated = generateChannelDrivenPlan(base, weeklySchedule);
+  const updated = mergeGeneratedPlanPreservingToday(base, generated, weeklySchedule);
   await saveState(updated);
   return Response.json(buildDashboard(updated));
 }
