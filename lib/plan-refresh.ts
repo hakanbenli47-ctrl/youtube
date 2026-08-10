@@ -1,9 +1,11 @@
 import "server-only";
 
-import { generateMonthlyPlan, planReviewStamp } from "./planner";
+import { generateChannelDrivenPlan } from "./channel-driven-plan";
+import { currentIstanbulWeekKey } from "./scheduling";
 import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
-const PLAN_REFRESH_HOUR = 21;
+const FUTURE_PLAN_REFRESH_MS = 2 * 60_000;
+const LEGACY_REFRESH_HOUR = 21;
 
 function istanbulParts(value: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -12,6 +14,7 @@ function istanbulParts(value: Date) {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
+    minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(value);
   const get = (type: Intl.DateTimeFormatPartTypes) =>
@@ -19,6 +22,7 @@ function istanbulParts(value: Date) {
   return {
     date: `${get("year")}-${get("month")}-${get("day")}`,
     hour: Number(get("hour") || 0),
+    minute: Number(get("minute") || 0),
   };
 }
 
@@ -29,24 +33,21 @@ function sortPlan(plan: PlanItem[]) {
   );
 }
 
-function refreshedAfterCutoffToday(state: ChannelState, now: Date) {
-  if (!state.planning?.generatedAt) return false;
-  const current = istanbulParts(now);
-  const generated = istanbulParts(new Date(state.planning.generatedAt));
-  return generated.date === current.date && generated.hour >= PLAN_REFRESH_HOUR;
+function planAge(state: ChannelState) {
+  if (!state.planning?.generatedAt) return Number.POSITIVE_INFINITY;
+  const generated = new Date(state.planning.generatedAt).getTime();
+  return Number.isFinite(generated) ? Date.now() - generated : Number.POSITIVE_INFINITY;
 }
 
 /**
- * Konu planı canlı veri her yenilendiğinde değişmemeli.
- * Günün başlıkları o gün boyunca kilitlidir. Yeni 6 Shorts düzeninde son yayın
- * 19:00 olduğu için yarın ve sonrası saat 21:00'dan sonra güncel verilerle
- * günde bir kez yeniden hesaplanır.
+ * Canlı YouTube verisi iki dakikada bir yenilenebilir. Bugünün seçilmiş konuları
+ * gün boyunca kilitlidir; yarın ve sonrası ise yeni izlenme/abone/beğeni sonuçları
+ * geldikçe yeniden puanlanabilir. Böylece gün içinde hazırlanmış içerik değişmez,
+ * fakat gelecek plan kanalın gerçek performansını takip eder.
  */
-export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
+export function shouldRefreshFuturePlan(state: ChannelState) {
   if (!state.plan.length) return true;
-  const current = istanbulParts(now);
-  if (current.hour < PLAN_REFRESH_HOUR) return false;
-  return !refreshedAfterCutoffToday(state, now);
+  return planAge(state) >= FUTURE_PLAN_REFRESH_MS;
 }
 
 export function mergeGeneratedPlanPreservingToday(
@@ -56,9 +57,6 @@ export function mergeGeneratedPlanPreservingToday(
   now = new Date(),
 ) {
   const today = istanbulParts(now).date;
-
-  // Bugün seçilmiş içerikler varsa onları kesinlikle koru. Böylece 19:00 dahil
-  // gün içindeki altı video sonradan değişmez; yalnızca yarın ve sonrası yenilenir.
   const lockedToday = state.plan.filter((item) => item.date === today);
   const todayPlan = lockedToday.length
     ? lockedToday
@@ -68,7 +66,11 @@ export function mergeGeneratedPlanPreservingToday(
   return {
     ...state,
     plan: sortPlan([...todayPlan, ...futurePlan]),
-    planning: planReviewStamp(weeklySchedule),
+    planning: {
+      weekKey: currentIstanbulWeekKey(),
+      generatedAt: new Date().toISOString(),
+      weeklySchedule,
+    },
   };
 }
 
@@ -77,7 +79,7 @@ export function rebuildFuturePlan(
   weeklySchedule: WeeklyScheduleDay[],
   now = new Date(),
 ) {
-  const generated = generateMonthlyPlan(state, weeklySchedule);
+  const generated = generateChannelDrivenPlan(state, weeklySchedule);
   return mergeGeneratedPlanPreservingToday(state, generated, weeklySchedule, now);
 }
 
@@ -86,15 +88,14 @@ export function maybeRefreshFuturePlan(
   weeklySchedule: WeeklyScheduleDay[],
   now = new Date(),
 ) {
-  if (!shouldRefreshFuturePlan(state, now)) return state;
+  if (!shouldRefreshFuturePlan(state)) return state;
   return rebuildFuturePlan(state, weeklySchedule, now);
 }
 
 export function nextDailyPlanRefreshAt(now = new Date()) {
-  const current = istanbulParts(now);
-  const todayAtRefresh = new Date(`${current.date}T${String(PLAN_REFRESH_HOUR).padStart(2, "0")}:00:00+03:00`);
-  if (now.getTime() < todayAtRefresh.getTime()) return todayAtRefresh.toISOString();
-  return new Date(todayAtRefresh.getTime() + 86_400_000).toISOString();
+  return new Date(now.getTime() + FUTURE_PLAN_REFRESH_MS).toISOString();
 }
 
-export const DAILY_PLAN_REFRESH_HOUR = PLAN_REFRESH_HOUR;
+// Eski importları bozmamak için tutuluyor; plan artık saat 21:00'ı beklemiyor.
+export const DAILY_PLAN_REFRESH_HOUR = LEGACY_REFRESH_HOUR;
+export const FUTURE_PLAN_REFRESH_INTERVAL_MS = FUTURE_PLAN_REFRESH_MS;
