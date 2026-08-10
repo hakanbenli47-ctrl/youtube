@@ -1,7 +1,5 @@
 import { buildDashboard } from "@/lib/analytics";
 import { restoreAuthFromRequest } from "@/lib/auth-cookie";
-import { maybeRefreshFuturePlan } from "@/lib/plan-refresh";
-import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
 import { refreshPublicYouTubeStats, scanTrends, syncYouTube } from "@/lib/youtube-v2";
 
@@ -67,9 +65,24 @@ export async function POST(request: Request) {
         }
       }
 
+      // Önce kanal verisini tamamla ve kaydet. Bu işlemden sonra kullanıcıya veri
+      // döndürebilmek için plan üretimini beklemiyoruz.
       state = await syncYouTube();
+
+      // Otomatik açılış senkronunda trend taraması ve 30 günlük plan hesabı yapma.
+      // Vercel geçici depodan yeni instance açtığında bu yol kanal verilerini en kısa
+      // sürede yeniden doldurur. Trend ve plan işlemleri ayrı cron/plan akışında kalır.
+      if (automatic) {
+        return Response.json({
+          skipped: false,
+          lightweight: false,
+          reason: "Kanal verileri yenilendi; plan hesabı arka plandaki ayrı akışa bırakıldı.",
+          dashboard: buildDashboard(state),
+        });
+      }
+
       const trendAge = ageOf(state.sync.lastTrendScan);
-      if (!automatic || trendAge > 24 * 60 * 60_000) {
+      if (trendAge > 24 * 60 * 60_000) {
         try {
           state = await scanTrends();
         } catch (error) {
@@ -77,12 +90,8 @@ export async function POST(request: Request) {
         }
       }
 
-      // Canlı verileri her yenilemede al; fakat konu planını oynatma.
-      // Bugünün içerikleri kilitli kalır, yarın ve sonrası yalnızca 19:00'dan
-      // sonra güncel performansla günde bir kez yeniden hesaplanır.
-      const weeklySchedule = buildAdaptiveWeeklySchedule(state);
-      state = maybeRefreshFuturePlan(state, weeklySchedule);
-
+      // Manuel veri yenilemede de ağır 30 günlük plan hesabını çalıştırma.
+      // Planın kendi endpoint'i ve günlük cron bu işi ayrı yürütür.
       await saveState(state);
       return Response.json({
         skipped: false,
