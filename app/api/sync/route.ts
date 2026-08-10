@@ -1,5 +1,7 @@
 import { buildDashboard } from "@/lib/analytics";
 import { restoreAuthFromRequest } from "@/lib/auth-cookie";
+import { maybeRefreshFuturePlan } from "@/lib/plan-refresh";
+import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
 import { bootstrapPublicYouTubeState, refreshPublicYouTubeStats, scanTrends, syncYouTube } from "@/lib/youtube-v2";
 
@@ -10,6 +12,13 @@ function ageOf(value: string | null | undefined) {
   if (!value) return Number.POSITIVE_INFINITY;
   const timestamp = new Date(value).getTime();
   return Number.isFinite(timestamp) ? Date.now() - timestamp : Number.POSITIVE_INFINITY;
+}
+
+async function applyLivePlan(state: Awaited<ReturnType<typeof getState>>) {
+  const weeklySchedule = buildAdaptiveWeeklySchedule(state);
+  const planned = maybeRefreshFuturePlan(state, weeklySchedule);
+  if (planned !== state) await saveState(planned);
+  return planned;
 }
 
 export async function POST(request: Request) {
@@ -30,24 +39,29 @@ export async function POST(request: Request) {
         });
       }
 
-      let bootstrapped = false;
-
-      // Vercel yeni instance açıp /tmp durumunu kaybettiyse önce yalnızca YouTube
-      // Data API ile kanal ve tüm yüklenmiş videoların public verisini geri kur.
-      // Ardından aynı istekte ayrıntılı Analytics tamamlanmaya çalışılır.
-      if (automatic && state.videos.length === 0) {
+      // Deploy sonrası geçici hafıza boşalmışsa önce Data API ile kanalın TÜM
+      // yüklenmiş videolarını ve başlıklarını geri al. Planı da hemen bu gerçek
+      // konu hafızasından kur; ağır Analytics raporunu bekletme.
+      if (state.videos.length === 0) {
         state = await bootstrapPublicYouTubeState(state);
-        bootstrapped = true;
+        state = await applyLivePlan(state);
+        if (automatic) {
+          return Response.json({
+            skipped: false,
+            lightweight: true,
+            bootstrapped: true,
+            reason: `${state.videos.length} video konu hafızasına alındı; bugünün konuları kilitlendi, gelecek plan kanal verisinden oluşturuldu.`,
+            dashboard: buildDashboard(state),
+          });
+        }
       }
 
       const fullIntervalMinutes = Math.max(
         15,
         Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60),
       );
-      const publicIntervalMinutes = Math.max(
-        2,
-        Number(process.env.YOUTUBE_PUBLIC_SYNC_INTERVAL_MINUTES || 2),
-      );
+      // Canlı public izlenmeler kullanıcının istediği gibi iki dakikada bir alınır.
+      const publicIntervalMinutes = 2;
       const fullSyncDue =
         ageOf(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync) >=
         fullIntervalMinutes * 60_000;
@@ -55,54 +69,33 @@ export async function POST(request: Request) {
       if (automatic && !fullSyncDue) {
         const publicSyncDue =
           ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
+
         if (publicSyncDue) {
           state = await refreshPublicYouTubeStats(state);
           const discoveredNewUpload = state.channel.videoCount > state.videos.length;
+
           if (!discoveredNewUpload) {
+            state = await applyLivePlan(state);
             return Response.json({
               skipped: false,
               lightweight: true,
-              reason: "Canlı görüntülenmeler yenilendi; ayrıntılı Analytics henüz yenileme aralığında.",
+              reason: "Canlı izlenmeler 2 dakikalık ölçümle yenilendi; bugünün konuları sabit, gelecek konular yeni sonuçlara göre puanlandı.",
               dashboard: buildDashboard(state),
             });
           }
         } else {
+          state = await applyLivePlan(state);
           return Response.json({
             skipped: true,
-            reason: "Canlı veri henüz yenileme aralığında",
+            reason: "İki dakikalık canlı veri aralığı henüz dolmadı; mevcut konu kilidi korundu.",
             dashboard: buildDashboard(state),
           });
         }
       }
 
-      // Kanal verisini tamamla. Plan üretimi bu isteğin parçası değildir.
-      try {
-        state = await syncYouTube();
-      } catch (error) {
-        // Public bootstrap başarılıysa Analytics geçici hata verse bile kullanıcıya
-        // 0 veri döndürme; temel canlı veriyi koru ve paneli aç.
-        if (bootstrapped && state.videos.length > 0) {
-          const message = error instanceof Error ? error.message : "Analytics senkronu tamamlanamadı.";
-          return Response.json({
-            skipped: false,
-            lightweight: true,
-            partial: true,
-            reason: `Temel kanal verileri yüklendi; ayrıntılı Analytics geçici olarak tamamlanamadı: ${message}`,
-            dashboard: buildDashboard(state),
-          });
-        }
-        throw error;
-      }
-
-      // Otomatik açılış senkronunda trend taraması ve 30 günlük plan hesabı yapma.
-      if (automatic) {
-        return Response.json({
-          skipped: false,
-          lightweight: false,
-          reason: "Kanal ve ayrıntılı Analytics verileri yenilendi.",
-          dashboard: buildDashboard(state),
-        });
-      }
+      // Saatlik/manuel tam senkron: bütün videoların Analytics metriklerini çek.
+      // Bu veriler hem konu seçiminde hem yayın saatlerinin puanında kullanılır.
+      state = await syncYouTube();
 
       const trendAge = ageOf(state.sync.lastTrendScan);
       if (trendAge > 24 * 60 * 60_000) {
@@ -113,11 +106,13 @@ export async function POST(request: Request) {
         }
       }
 
-      // Manuel veri yenilemede de ağır 30 günlük plan hesabını çalıştırma.
+      state = await applyLivePlan(state);
       await saveState(state);
+
       return Response.json({
         skipped: false,
         lightweight: false,
+        reason: "Tüm video sonuçları, saat modeli ve tekrarsız gelecek konu planı yenilendi.",
         dashboard: buildDashboard(state),
       });
     });
