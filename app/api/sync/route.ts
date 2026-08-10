@@ -30,18 +30,14 @@ export async function POST(request: Request) {
         });
       }
 
+      let bootstrapped = false;
+
       // Vercel yeni instance açıp /tmp durumunu kaybettiyse önce yalnızca YouTube
       // Data API ile kanal ve tüm yüklenmiş videoların public verisini geri kur.
-      // Böylece ağır Analytics raporu veya plan hesabı panelde 0 veri görünmesini engellemez.
+      // Ardından aynı istekte ayrıntılı Analytics tamamlanmaya çalışılır.
       if (automatic && state.videos.length === 0) {
         state = await bootstrapPublicYouTubeState(state);
-        return Response.json({
-          skipped: false,
-          lightweight: true,
-          bootstrapped: true,
-          reason: "Kanal verileri hızlıca geri yüklendi; ayrıntılı Analytics sonraki senkronla tamamlanacak.",
-          dashboard: buildDashboard(state),
-        });
+        bootstrapped = true;
       }
 
       const fullIntervalMinutes = Math.max(
@@ -79,16 +75,31 @@ export async function POST(request: Request) {
         }
       }
 
-      // Önce kanal verisini tamamla ve kaydet. Bu işlemden sonra kullanıcıya veri
-      // döndürebilmek için plan üretimini beklemiyoruz.
-      state = await syncYouTube();
+      // Kanal verisini tamamla. Plan üretimi bu isteğin parçası değildir.
+      try {
+        state = await syncYouTube();
+      } catch (error) {
+        // Public bootstrap başarılıysa Analytics geçici hata verse bile kullanıcıya
+        // 0 veri döndürme; temel canlı veriyi koru ve paneli aç.
+        if (bootstrapped && state.videos.length > 0) {
+          const message = error instanceof Error ? error.message : "Analytics senkronu tamamlanamadı.";
+          return Response.json({
+            skipped: false,
+            lightweight: true,
+            partial: true,
+            reason: `Temel kanal verileri yüklendi; ayrıntılı Analytics geçici olarak tamamlanamadı: ${message}`,
+            dashboard: buildDashboard(state),
+          });
+        }
+        throw error;
+      }
 
       // Otomatik açılış senkronunda trend taraması ve 30 günlük plan hesabı yapma.
       if (automatic) {
         return Response.json({
           skipped: false,
           lightweight: false,
-          reason: "Kanal verileri yenilendi; plan hesabı ayrı akışta çalışacak.",
+          reason: "Kanal ve ayrıntılı Analytics verileri yenilendi.",
           dashboard: buildDashboard(state),
         });
       }
