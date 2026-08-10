@@ -226,12 +226,11 @@ export function appendSnapshot(state: ChannelState, videos: VideoMetric[]): Metr
     .filter((item) => Date.now() - new Date(item.capturedAt).getTime() <= 120 * DAY_MS)
     .sort((left, right) => left.capturedAt.localeCompare(right.capturedAt));
 
-  // Önceki davranış son snapshot'ın zamanını her hafif senkronizasyonda ileri taşıdığı için
-  // sık yenilemede yeni örnek hiç oluşmayabiliyordu. Artık 3 dakikadan kısa aralıkta
-  // mevcut örnek korunur; süre dolduğunda yeni bir nokta eklenir. Böylece /dk hızı gerçek
-  // iki ayrı ölçüm arasından hesaplanabilir.
+  // Canlı public veriler iki dakikada bir çekiliyor. 105 saniyelik koruma,
+  // aynı turun çift yazılmasını önlerken her iki dakikalık ölçümün yeni snapshot
+  // olarak saklanmasına izin verir. Böylece saat ve hız modeli gerçek canlı değişimi izler.
   const last = snapshots.at(-1);
-  if (last && Date.now() - new Date(last.capturedAt).getTime() < 3 * 60_000) {
+  if (last && Date.now() - new Date(last.capturedAt).getTime() < 105_000) {
     return snapshots.slice(-720);
   }
 

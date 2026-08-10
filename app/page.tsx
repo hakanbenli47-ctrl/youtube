@@ -375,7 +375,7 @@ export default function Home() {
       <main className="content">
         <div className="page-heading">
           <div><span>{state.channel.handle}</span><h1>{titleForTab[activeTab]}</h1></div>
-          <small>Son yenileme: {formatDate(state.sync.lastYouTubeSync || state.sync.lastStudioImport)}</small>
+          <small>Son canlı yenileme: {formatDate(state.sync.lastPublicStatsSync || state.sync.lastYouTubeSync || state.sync.lastStudioImport)}</small>
         </div>
         {notice && <div className="notice"><ShieldCheck size={18} />{notice}</div>}
 
