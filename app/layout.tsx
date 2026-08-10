@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import AutoLiveSync from "./auto-live-sync";
 import "./globals.css";
 import "./youtube-theme.css";
 import "./theme-patch-v3.css";
@@ -37,6 +38,7 @@ export default function RootLayout({
     <html lang="tr" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>
         {children}
+        <AutoLiveSync />
         <nav className="global-quick-nav" aria-label="Hızlı erişim">
           <a href="/">Plan</a>
           <a href="/analytics">Canlı analizler</a>
