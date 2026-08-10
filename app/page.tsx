@@ -292,7 +292,7 @@ export default function Home() {
     const publishedToday = data.state.videos
       .filter((video) => video.contentType === "SHORT" && dateInIstanbul(video.publishedAt) === today)
       .sort((a, b) => a.publishedAt.localeCompare(b.publishedAt));
-    const todayComplete = publishedToday.length >= 3;
+    const todayComplete = publishedToday.length >= 6;
     const actionDay = todayComplete
       ? sortedDays.find(([date]) => date > today)
       : sortedDays.find(([date]) => date >= today);
@@ -329,7 +329,7 @@ export default function Home() {
   const { state, shortsGrowthGoal } = data;
   const todayShorts = derived.todayItems.filter((item) => item.format === "Shorts");
   const todayLong = derived.todayItems.find((item) => item.format !== "Shorts");
-  const perShortTarget = shortsGrowthGoal.requiredViewsPerDay / 3;
+  const perShortTarget = shortsGrowthGoal.requiredViewsPerDay / 6;
   const titleForTab: Record<Tab, string> = {
     today: "Bugün ne yapmalıyım?",
     winners: "Kanalında ne tutuyor?",
@@ -378,7 +378,7 @@ export default function Home() {
                 <h2>{derived.todayComplete ? `Bugünün ${derived.publishedToday.length} Shorts’u yayınlandı.` : "Bugünkü yayın planın hazır."}</h2>
                 <p>{derived.todayComplete
                   ? "Bugün için yeni video ekleme. İlk sonuçların yerleşmesine izin ver; sıradaki üç içeriği yarın için hazırla."
-                  : "Üç video üç ayrı amaç taşıyor: biri izlenme, biri abone, biri beğeni. Saatler bu haftaki kanal sonucuna göre hesaplandı."}</p>
+                  : "Altı video üç amacı dengeli dağıtıyor: iki izlenme, iki abone, iki beğeni odağı. Saatler kanalındaki gerçek yayın sonuçlarına göre puanlanıyor."}</p>
                 <div className="answer-rule">
                   <CheckCircle2 size={20} />
                   <span><b>Haftalık kural:</b> Anlamlı fark yoksa saat korunur; yeni saat ancak yeterli performans kanıtıyla seçilir.</span>
@@ -386,7 +386,7 @@ export default function Home() {
               </div>
               <div className="answer-summary">
                 <span>{derived.todayComplete ? "Bugünkü durum" : "Bugünkü üretim"}</span>
-                <strong>{derived.todayComplete ? "Tamamlandı ✓" : `${todayShorts.length || 3} Shorts${todayLong ? " + 1 uzun" : ""}`}</strong>
+                <strong>{derived.todayComplete ? "Tamamlandı ✓" : `${todayShorts.length || 6} Shorts${todayLong ? " + 1 uzun" : ""}`}</strong>
                 <small>{derived.todayComplete ? "Şimdi yarının seslendirmelerini ve görsellerini hazırla." : `Her Shorts için hedef: yaklaşık ${compact.format(perShortTarget)} geçerli izlenme`}</small>
               </div>
             </section>
@@ -491,7 +491,7 @@ export default function Home() {
                 <CircleAlert size={24} />
                 <div>
                   <span>Şu an hedef hızının %{decimal.format(derived.pacePercent)} seviyesindesin.</span>
-                  <p>Günlük ortalaman <b>{compact.format(shortsGrowthGoal.currentViewsPerDay)}</b>; gereken günlük hız <b>{compact.format(shortsGrowthGoal.requiredViewsPerDay)}</b>. Bu yüzden tek bir konuya yüklenmek yerine, 3 ayrı kancayı her gün kontrollü test edeceğiz.</p>
+                  <p>Günlük ortalaman <b>{compact.format(shortsGrowthGoal.currentViewsPerDay)}</b>; gereken günlük hız <b>{compact.format(shortsGrowthGoal.requiredViewsPerDay)}</b>. Bu yüzden aynı konuyu tekrarlamak yerine, 6 ayrı içeriği kanalındaki gerçek sonuçlarla kontrollü test edeceğiz.</p>
                 </div>
               </div>
               <details className="calculation-details">
@@ -504,7 +504,7 @@ export default function Home() {
               <article>
                 <TrendingUp size={21} />
                 <h3>Neyi çoğalt?</h3>
-                <p>{derived.strongest ? `${derived.strongest.label} yapısını yeni olaylarla tekrar test et.` : "Üç farklı soru kalıbını test et."}</p>
+                <p>{derived.strongest ? `${derived.strongest.label} yapısını yeni olaylarla tekrar test et.` : "Altı farklı içerikte güçlü soru kalıplarını test et."}</p>
                 <button onClick={() => setActiveTab("winners")}>Kanıtları aç</button>
               </article>
               <article>
@@ -561,7 +561,7 @@ export default function Home() {
         {activeTab === "plan" && (
           <>
             <section className="plan-intro">
-              <div><span>30 GÜNDE 90 SHORTS + 4 UZUN VİDEO</span><h2>Her gün ne çekeceğin hazır.</h2><p>Aynı başlık ve olay tekrar edilmez. Perşembe akşamları bir padişahın hayatı uzun video olarak yayınlanır.</p></div>
+              <div><span>30 GÜNDE 180 SHORTS</span><h2>Her gün ne çekeceğin hazır.</h2><p>Aynı başlık ve olay tekrar edilmez. Perşembe akşamları bir padişahın hayatı uzun video olarak yayınlanır.</p></div>
               <button className="primary-button" disabled={Boolean(busy)} onClick={() => runAction("plan", "/api/plan", { body: JSON.stringify({ useLocalAi: false }) })}><Sparkles size={17} /> Planı yeniden hesapla</button>
             </section>
             <section className="weekly-strip">
