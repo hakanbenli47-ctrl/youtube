@@ -34,6 +34,11 @@ type Candidate = {
   viralBonus: number;
 };
 
+type PlanningMemory = {
+  coveredSubjects?: string[];
+  plannerVersion?: number;
+};
+
 const DAY_MS = 86_400_000;
 const SUBJECT_PREFIX = "Yeni konu evreni:";
 const STOP_WORDS = new Set([
@@ -49,6 +54,13 @@ const RULER_WORDS = new Set([
 ]);
 const ACTION_WORD = /^(?:feth|fetih|alın|alin|kayb|kayıp|kayip|düş|dus|sefer|harekat|harekât|yürü|yuru|kuşat|kusat|isyan|ayaklan|savaş|savas|muharebe|zafer|baskın|baskin|antlaşma|antlasma|mütareke|mutareke|yönetim|yonetim|geçiş|gecis|kriz|reform|sistem|teşkilat|teskilat|uygulama|dönem|donem|olay)/;
 const ORDINALS = new Set(["birinci", "ikinci", "üçüncü", "ucuncu", "dördüncü", "dorduncu", "i", "ii", "iii", "iv", "v"]);
+const STRONG_EVENT_ANCHORS = new Set([
+  "duzmece", "celali", "inegol", "inebahti", "halic", "modon", "koron", "budin", "belgrad", "viyana",
+  "canakkale", "menzil", "karacahisar", "koyunhisar", "pelekanon", "sırpsındığı", "sirpsindigi", "cirmen",
+  "nigbolu", "otlukbeli", "caldiran", "turnadag", "mercidabik", "ridaniye", "mohac", "preveze", "cerbe",
+  "zigetvar", "kandiye", "karlofca", "prut", "pasarofca", "zenta", "salankamen", "plevne", "sarıkamıs",
+  "sarikamis", "kutul", "mondros",
+]);
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -71,6 +83,14 @@ function alias(word: string) {
   if (/^viyana/.test(word)) return "viyana";
   if (/^çanakkale/.test(word) || /^canakkale/.test(word)) return "canakkale";
   if (/^düzmece/.test(word) || /^duzmece/.test(word)) return "duzmece";
+  if (/^inegöl/.test(word) || /^inegol/.test(word)) return "inegol";
+  if (/^inebaht/.test(word) || /^lepanto/.test(word)) return "inebahti";
+  if (/^haliç/.test(word) || /^halic/.test(word)) return "halic";
+  if (/^celali/.test(word)) return "celali";
+  if (/^modon/.test(word)) return "modon";
+  if (/^koron/.test(word)) return "koron";
+  if (/^gemi/.test(word)) return "gemi";
+  if (/^menzil/.test(word)) return "menzil";
   return word;
 }
 
@@ -105,6 +125,23 @@ function family(value: string): EventFamily {
   return "other";
 }
 
+function anchorMatches(left: string, right: string) {
+  if (left === right) return true;
+  const size = Math.min(left.length, right.length);
+  if (size < 5) return false;
+  const prefixLength = Math.min(6, size);
+  return left.slice(0, prefixLength) === right.slice(0, prefixLength);
+}
+
+function sharedAnchorValues(left: Set<string>, right: Set<string>) {
+  const matches: string[] = [];
+  for (const leftValue of left) {
+    const rightValue = [...right].find((value) => anchorMatches(leftValue, value));
+    if (rightValue) matches.push(alias(leftValue));
+  }
+  return [...new Set(matches)];
+}
+
 function sameHistoricalEvent(left: string, right: string) {
   const a = normalize(left);
   const b = normalize(right);
@@ -122,15 +159,17 @@ function sameHistoricalEvent(left: string, right: string) {
   const rightFamily = family(right);
   const leftAnchors = anchors(left);
   const rightAnchors = anchors(right);
-  const shared = [...leftAnchors].filter((word) => rightAnchors.has(word));
+  const shared = sharedAnchorValues(leftAnchors, rightAnchors);
   if (!shared.length) return false;
 
-  if (leftFamily !== "other" && rightFamily !== "other" && leftFamily !== rightFamily) return false;
+  // Başlık olayı "isyan", "kriz", "olay", "sefer" gibi farklı kelimelerle
+  // anlatabilir. Aynı tarihî çekirdek varsa olay ailesi farklı diye tekrar kabul etme.
+  if (shared.length >= 2) return true;
+  if (shared.some((value) => STRONG_EVENT_ANCHORS.has(value))) return true;
   if (leftFamily === rightFamily && leftFamily !== "other") return true;
 
   const containment = shared.length / Math.max(1, Math.min(leftAnchors.size, rightAnchors.size));
-  if (shared.length >= 2 && containment >= 0.6) return true;
-  return shared.length === 1 && shared[0].length >= 5 && Math.min(leftAnchors.size, rightAnchors.size) === 1;
+  return shared.length === 1 && shared[0].length >= 5 && containment >= 0.5;
 }
 
 function subjectFromSource(title: string, sourceTitle: string) {
@@ -202,7 +241,10 @@ function titleFor(subject: string, eventFamily: EventFamily, seed: number) {
 }
 
 function buildCandidatePool(state: ChannelState) {
-  const published = state.videos.filter((video) => video.contentType === "SHORT").map((video) => video.title);
+  // Sadece SHORT diye işaretlenenleri değil, kanaldaki bütün yayın başlıklarını kontrol et.
+  // API sınıflandırma gecikse bile daha önce işlenmiş olay tekrar havuza girmesin.
+  const published = state.videos.map((video) => video.title);
+  const planningMemory = (state.planning as (typeof state.planning & PlanningMemory) | undefined)?.coveredSubjects || [];
   const all = buildViralTopicCandidates(state, 0);
   const freshOnly = all.filter((item) => item.sourceTitle.startsWith(SUBJECT_PREFIX));
   const source = freshOnly.length >= 180 ? freshOnly : all;
@@ -214,6 +256,7 @@ function buildCandidatePool(state: ChannelState) {
     const key = normalize(subject);
     if (!subject || seen.has(key)) return;
     if (published.some((title) => sameHistoricalEvent(subject, title))) return;
+    if (planningMemory.some((covered) => sameHistoricalEvent(subject, covered))) return;
     if (candidates.some((candidate) => sameHistoricalEvent(subject, candidate.subject))) return;
 
     const view = evidenceFor(state, subject, "İzlenme");
@@ -301,7 +344,7 @@ function hashtagsFor(candidate: Candidate) {
 
 function reasonFor(state: ChannelState, candidate: Candidate, objective: Objective) {
   const shorts = state.videos.filter((video) => video.contentType === "SHORT").length;
-  return `${shorts} Shorts'un izlenme hızı, tutma, beğeni ve abone dönüşümü tema düzeyinde analiz edildi. ${candidate.subject} daha önce yayınlanmış aynı tarihî olayla eşleşmedi ve 30 günlük planda başka hiçbir slotta tekrar kullanılmıyor. Seçim ${candidate.evidenceSamples} yakın tema örneğinin ${objective.toLocaleLowerCase("tr-TR")} sinyaline göre puanlandı.`;
+  return `${shorts} Shorts'un izlenme hızı, tutma, beğeni ve abone dönüşümü tema düzeyinde analiz edildi. ${candidate.subject} yayın geçmişi ve kalıcı konu hafızasında yeni olarak doğrulandı; aynı olay 30 günlük planda ikinci kez kullanılamaz. Seçim ${candidate.evidenceSamples} yakın tema örneğinin ${objective.toLocaleLowerCase("tr-TR")} sinyaline göre puanlandı.`;
 }
 
 function istanbulTodayAtNoon() {
