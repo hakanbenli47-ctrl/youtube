@@ -15,10 +15,26 @@ function ageOf(value: string | null | undefined) {
 }
 
 async function applyLivePlan(state: Awaited<ReturnType<typeof getState>>) {
-  const weeklySchedule = buildAdaptiveWeeklySchedule(state);
-  const planned = maybeRefreshFuturePlan(state, weeklySchedule);
-  if (planned !== state) await saveState(planned);
-  return planned;
+  try {
+    const weeklySchedule = buildAdaptiveWeeklySchedule(state);
+    const planned = maybeRefreshFuturePlan(state, weeklySchedule);
+    if (planned !== state) await saveState(planned);
+    return planned;
+  } catch (error) {
+    // Plan motoru hiçbir zaman YouTube bağlantısını veya veri senkronunu düşürmemeli.
+    // Plan hatası ayrı kaydedilir; canlı kanal verisi kullanıcıya yine döner.
+    console.error("Konu planı yenilenemedi; YouTube senkronu korunuyor.", error);
+    return {
+      ...state,
+      sync: {
+        ...state.sync,
+        warnings: [
+          ...(state.sync.warnings || []).filter((warning) => !warning.startsWith("Plan motoru:")),
+          `Plan motoru: ${error instanceof Error ? error.message : "yenilenemedi"}`,
+        ].slice(-8),
+      },
+    };
+  }
 }
 
 export async function POST(request: Request) {
@@ -39,18 +55,16 @@ export async function POST(request: Request) {
         });
       }
 
-      // Deploy sonrası geçici hafıza boşalmışsa önce Data API ile kanalın TÜM
-      // yüklenmiş videolarını ve başlıklarını geri al. Planı da hemen bu gerçek
-      // konu hafızasından kur; ağır Analytics raporunu bekletme.
       if (state.videos.length === 0) {
         state = await bootstrapPublicYouTubeState(state);
         state = await applyLivePlan(state);
+        await saveState(state);
         if (automatic) {
           return Response.json({
             skipped: false,
             lightweight: true,
             bootstrapped: true,
-            reason: `${state.videos.length} video konu hafızasına alındı; bugünün konuları kilitlendi, gelecek plan kanal verisinden oluşturuldu.`,
+            reason: `${state.videos.length} video konu hafızasına alındı; kanal bağlantısı hazır.`,
             dashboard: buildDashboard(state),
           });
         }
@@ -60,15 +74,13 @@ export async function POST(request: Request) {
         15,
         Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60),
       );
-      // Canlı public izlenmeler kullanıcının istediği gibi iki dakikada bir alınır.
       const publicIntervalMinutes = 2;
       const fullSyncDue =
         ageOf(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync) >=
         fullIntervalMinutes * 60_000;
 
       if (automatic && !fullSyncDue) {
-        const publicSyncDue =
-          ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
+        const publicSyncDue = ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
 
         if (publicSyncDue) {
           state = await refreshPublicYouTubeStats(state);
@@ -76,25 +88,25 @@ export async function POST(request: Request) {
 
           if (!discoveredNewUpload) {
             state = await applyLivePlan(state);
+            await saveState(state);
             return Response.json({
               skipped: false,
               lightweight: true,
-              reason: "Canlı izlenmeler 2 dakikalık ölçümle yenilendi; bugünün konuları sabit, gelecek konular yeni sonuçlara göre puanlandı.",
+              reason: "Canlı izlenmeler yenilendi; bağlantı ve kanal verisi plan motorundan bağımsız tutuluyor.",
               dashboard: buildDashboard(state),
             });
           }
         } else {
           state = await applyLivePlan(state);
+          await saveState(state);
           return Response.json({
             skipped: true,
-            reason: "İki dakikalık canlı veri aralığı henüz dolmadı; mevcut konu kilidi korundu.",
+            reason: "İki dakikalık canlı veri aralığı henüz dolmadı.",
             dashboard: buildDashboard(state),
           });
         }
       }
 
-      // Saatlik/manuel tam senkron: bütün videoların Analytics metriklerini çek.
-      // Bu veriler hem konu seçiminde hem yayın saatlerinin puanında kullanılır.
       state = await syncYouTube();
 
       const trendAge = ageOf(state.sync.lastTrendScan);
@@ -112,7 +124,7 @@ export async function POST(request: Request) {
       return Response.json({
         skipped: false,
         lightweight: false,
-        reason: "Tüm video sonuçları, saat modeli ve tekrarsız gelecek konu planı yenilendi.",
+        reason: "YouTube verileri başarıyla yenilendi; konu planı ayrı ve güvenli şekilde işlendi.",
         dashboard: buildDashboard(state),
       });
     });
