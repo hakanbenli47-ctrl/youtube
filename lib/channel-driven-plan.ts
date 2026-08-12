@@ -11,6 +11,8 @@ type Objective = "İzlenme" | "Abone" | "Beğeni";
 type Candidate = {
   title: string;
   sourceTitle: string;
+  subjectKey: string;
+  subjectAnchors: string[];
   viralBonus: number;
   ruler: string;
   topic: string;
@@ -41,7 +43,8 @@ const EVENT_FAMILY_RULES: Array<[EventFamily, RegExp]> = [
   ["treaty", /\b(?:antlaşma\w*|antlasma\w*|mütareke\w*|mutareke\w*)/],
 ];
 
-const EVENT_ANCHOR_NOISE = /^(?:feth|fetih|alın|alin|kayb|kayıp|kayip|düş|dus|sefer|harekat|yürü|yuru|kuşat|kusat|isyan|ayaklan|başkaldır|baskaldir|savaş|savas|muharebe|zafer|baskın|baskin|antlaşma|antlasma|mütareke|mutareke|yönetim|yonetim|geçiş|gecis|denge|değiş|degis|etkile)/;
+const EVENT_ANCHOR_NOISE = /^(?:feth|fetih|alın|alin|kayb|kayıp|kayip|düş|dus|sefer|harekat|yürü|yuru|kuşat|kusat|isyan|ayaklan|başkaldır|baskaldir|savaş|savas|muharebe|zafer|baskın|baskin|antlaşma|antlasma|mütareke|mutareke|yönetim|yonetim|geçiş|gecis|denge|değiş|degis|etkile|önem|onem|hakk|kritik|ayrınt|ayrint)/;
+const RULER_ANCHOR_NOISE = /^(?:osman|orhan|murad|bayezid|mehmed|mehmet|selim|süleyman|suleyman|ahmed|ahmet|mustafa|mahmud|abdülhamid|abdulhamid|kanuni|fatih|yavuz|genç|genc)$/;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -81,6 +84,9 @@ function eventFamily(value: string) {
 
 function canonicalEventAnchor(word: string) {
   if (/^almanya/.test(word) || /^alman/.test(word)) return "alman";
+  if (/^budin/.test(word)) return "budin";
+  if (/^belgrad/.test(word)) return "belgrad";
+  if (/^viyana/.test(word)) return "viyana";
   return word;
 }
 
@@ -88,7 +94,7 @@ function eventAnchorWords(value: string) {
   return new Set(
     meaningfulWords(value)
       .map(canonicalEventAnchor)
-      .filter((word) => !EVENT_ANCHOR_NOISE.test(word)),
+      .filter((word) => !EVENT_ANCHOR_NOISE.test(word) && !RULER_ANCHOR_NOISE.test(word)),
   );
 }
 
@@ -100,6 +106,22 @@ function sameEventSignature(left: string, right: string) {
   const leftAnchors = eventAnchorWords(left);
   const rightAnchors = eventAnchorWords(right);
   return [...leftAnchors].some((word) => rightAnchors.has(word));
+}
+
+function broadSubjectOverlap(left: string, right: string) {
+  const leftAnchors = eventAnchorWords(left);
+  const rightAnchors = eventAnchorWords(right);
+  if (!leftAnchors.size || !rightAnchors.size) return false;
+
+  const shared = [...leftAnchors].filter((word) => rightAnchors.has(word));
+  if (!shared.length) return false;
+
+  // 30 günlük planda aynı merkez konu bir daha kullanılmaz. Olay türü farklı olsa bile
+  // Budin, Belgrad, Alman/Almanya gibi aynı tarihî merkez ikinci kez plana giremez.
+  if (shared.some((word) => word.length >= 5)) return true;
+
+  const containment = shared.length / Math.max(1, Math.min(leftAnchors.size, rightAnchors.size));
+  return shared.length >= 2 && containment >= 0.5;
 }
 
 function sameSubject(left: string, right: string) {
@@ -121,6 +143,37 @@ function sameSubject(left: string, right: string) {
   if (leftRuler !== "Diğer Osmanlı" && leftRuler === rightRuler && shared >= 2 && containment >= 0.42) return true;
   if (shared >= 3 && containment >= 0.52) return true;
   return shared >= 2 && containment >= 0.72;
+}
+
+function canonicalSubjectText(candidate: { title: string; sourceTitle: string }) {
+  if (candidate.sourceTitle.startsWith("Yeni konu evreni:")) {
+    return candidate.sourceTitle.slice("Yeni konu evreni:".length).trim();
+  }
+  return candidate.sourceTitle || candidate.title;
+}
+
+function subjectIdentity(candidate: { title: string; sourceTitle: string }) {
+  const source = canonicalSubjectText(candidate);
+  const anchors = [...eventAnchorWords(source || candidate.title)].sort();
+  const family = eventFamily(source) || eventFamily(candidate.title) || "topic";
+  const normalizedSource = normalize(source);
+  return {
+    key: anchors.length ? `${family}:${anchors.join("|")}` : `${family}:${normalizedSource}`,
+    anchors,
+  };
+}
+
+function candidatesShareSubject(left: Candidate, right: Candidate) {
+  if (left.subjectKey === right.subjectKey) return true;
+  if (sameSubject(left.title, right.title)) return true;
+  const leftSource = canonicalSubjectText(left);
+  const rightSource = canonicalSubjectText(right);
+  if (sameSubject(leftSource, rightSource)) return true;
+  if (broadSubjectOverlap(leftSource, rightSource)) return true;
+  if (broadSubjectOverlap(left.title, right.title)) return true;
+
+  const rightAnchors = new Set(right.subjectAnchors);
+  return left.subjectAnchors.some((anchor) => rightAnchors.has(anchor) && anchor.length >= 5);
 }
 
 function videoAgeDays(video: VideoMetric) {
@@ -182,8 +235,12 @@ function buildCandidatePool(state: ChannelState) {
 
   for (const candidate of raw) {
     if (!candidate.title) continue;
-    if (publishedTitles.some((title) => sameSubject(candidate.title, title))) continue;
-    if (unique.some((item) => sameSubject(candidate.title, item.title))) continue;
+    const sourceSubject = canonicalSubjectText(candidate);
+    if (publishedTitles.some((title) => sameSubject(candidate.title, title) || sameSubject(sourceSubject, title))) continue;
+    if (unique.some((item) =>
+      sameSubject(candidate.title, item.title) ||
+      sameSubject(sourceSubject, canonicalSubjectText(item))
+    )) continue;
     unique.push(candidate);
   }
 
@@ -191,9 +248,12 @@ function buildCandidatePool(state: ChannelState) {
     const view = evidenceFor(state, candidate.title, "İzlenme");
     const subscriber = evidenceFor(state, candidate.title, "Abone");
     const like = evidenceFor(state, candidate.title, "Beğeni");
+    const identity = subjectIdentity(candidate);
     return {
       title: candidate.title,
       sourceTitle: candidate.sourceTitle,
+      subjectKey: identity.key,
+      subjectAnchors: identity.anchors,
       viralBonus: candidate.viralBonus,
       ruler: detectOttomanRuler(candidate.title),
       topic: detectHistoryTopic(candidate.title),
@@ -247,7 +307,7 @@ function reasonFor(state: ChannelState, candidate: Candidate, objective: Objecti
   const source = candidate.sourceTitle.startsWith("Yeni konu evreni:")
     ? "kanalında daha önce işlenmemiş Osmanlı konu havuzundan"
     : "güncel tarih trendlerinden";
-  return `${shorts} mevcut Shorts'un gerçek sonuçları esas alındı. Bu konu ${source} seçildi; aynı olay daha önce yayınlanmış videolara karşı tekrar filtresinden geçti. ${candidate.evidenceSamples} benzer izleyici davranışı örneği ve ${objective.toLocaleLowerCase("tr-TR")} performansı birlikte puanlandı.`;
+  return `${shorts} mevcut Shorts'un gerçek sonuçları esas alındı. Bu konu ${source} seçildi; aynı olay daha önce yayınlanmış videolara ve 30 günlük plandaki diğer konulara karşı tekrar filtresinden geçti. ${candidate.evidenceSamples} benzer izleyici davranışı örneği ve ${objective.toLocaleLowerCase("tr-TR")} performansı birlikte puanlandı.`;
 }
 
 function selectCandidate(
@@ -258,7 +318,7 @@ function selectCandidate(
   seed: number,
 ) {
   const available = candidates.filter((candidate) =>
-    !used.some((item) => sameSubject(item.title, candidate.title)));
+    !used.some((item) => candidatesShareSubject(item, candidate)));
   const diverse = available.filter((candidate) =>
     candidate.ruler === "Diğer Osmanlı" || !usedRulersToday.has(candidate.ruler));
   const pool = diverse.length >= 2 ? diverse : available;
@@ -268,7 +328,7 @@ function selectCandidate(
 
   if (!ranked.length) return null;
   // İlk 12 güçlü seçenek içinde deterministik çeşitlilik: aynı veriyle plan zıplamaz,
-  // fakat her gün aynı padişah/konu kalıbına saplanmaz.
+  // fakat 30 gün boyunca aynı merkez konu ikinci kez kullanılamaz.
   return ranked[seed % Math.min(12, ranked.length)].candidate;
 }
 
