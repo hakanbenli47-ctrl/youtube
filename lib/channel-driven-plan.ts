@@ -30,6 +30,19 @@ const GENERIC_WORDS = new Set([
   "ve", "veya", "sonra", "dengeleri", "etkiledi", "onemliydi", "önemliydi", "kritik", "ayrinti", "ayrıntı",
 ]);
 
+type EventFamily = "conquest" | "loss" | "campaign" | "rebellion" | "battle" | "treaty";
+
+const EVENT_FAMILY_RULES: Array<[EventFamily, RegExp]> = [
+  ["conquest", /\b(?:feth\w*|fetih\w*|alın\w*|alin\w*|ele\s+geç\w*|ele\s+gec\w*|yönetimine\s+geç\w*|yonetimine\s+gec\w*)/],
+  ["loss", /\b(?:kayb\w*|kayıp\w*|kayip\w*|düş\w*|dus\w*|elden\s+çık\w*|elden\s+cik\w*)/],
+  ["campaign", /\b(?:sefer\w*|harekat\w*|harekât\w*|yürü\w*|yuru\w*|kuşat\w*|kusat\w*)/],
+  ["rebellion", /\b(?:isyan\w*|ayaklan\w*|başkaldır\w*|baskaldir\w*)/],
+  ["battle", /\b(?:savaş\w*|savas\w*|muharebe\w*|zafer\w*|baskın\w*|baskin\w*)/],
+  ["treaty", /\b(?:antlaşma\w*|antlasma\w*|mütareke\w*|mutareke\w*)/],
+];
+
+const EVENT_ANCHOR_NOISE = /^(?:feth|fetih|alın|alin|kayb|kayıp|kayip|düş|dus|sefer|harekat|yürü|yuru|kuşat|kusat|isyan|ayaklan|başkaldır|baskaldir|savaş|savas|muharebe|zafer|baskın|baskin|antlaşma|antlasma|mütareke|mutareke|yönetim|yonetim|geçiş|gecis|denge|değiş|degis|etkile)/;
+
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -61,11 +74,40 @@ function meaningfulWords(value: string) {
     .filter((word) => word.length >= 3 && !GENERIC_WORDS.has(word));
 }
 
+function eventFamily(value: string) {
+  const normalized = normalize(value);
+  return EVENT_FAMILY_RULES.find(([, rule]) => rule.test(normalized))?.[0] || null;
+}
+
+function canonicalEventAnchor(word: string) {
+  if (/^almanya/.test(word) || /^alman/.test(word)) return "alman";
+  return word;
+}
+
+function eventAnchorWords(value: string) {
+  return new Set(
+    meaningfulWords(value)
+      .map(canonicalEventAnchor)
+      .filter((word) => !EVENT_ANCHOR_NOISE.test(word)),
+  );
+}
+
+function sameEventSignature(left: string, right: string) {
+  const leftFamily = eventFamily(left);
+  const rightFamily = eventFamily(right);
+  if (!leftFamily || leftFamily !== rightFamily) return false;
+
+  const leftAnchors = eventAnchorWords(left);
+  const rightAnchors = eventAnchorWords(right);
+  return [...leftAnchors].some((word) => rightAnchors.has(word));
+}
+
 function sameSubject(left: string, right: string) {
   const a = normalize(left);
   const b = normalize(right);
   if (!a || !b) return false;
   if (a === b) return true;
+  if (sameEventSignature(left, right)) return true;
   if (titleSimilarity(left, right) >= 0.34) return true;
 
   const leftRuler = detectOttomanRuler(left);
