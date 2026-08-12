@@ -6,6 +6,12 @@ import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
+const PLANNER_VERSION = 3;
+
+type PlanningMemory = NonNullable<ChannelState["planning"]> & {
+  coveredSubjects?: string[];
+  plannerVersion?: number;
+};
 
 function istanbulParts(value: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -33,13 +39,47 @@ function sortPlan(plan: PlanItem[]) {
   );
 }
 
+function planningMemory(state: ChannelState) {
+  return state.planning as PlanningMemory | undefined;
+}
+
+function archiveCoveredSubjects(state: ChannelState, now = new Date()) {
+  const today = istanbulParts(now).date;
+  const previous = planningMemory(state)?.coveredSubjects || [];
+
+  // Saat 21:00 sonrası günün altı konusu tamamlanmış kabul edilir. Plan başlığı
+  // canonical konuyu içerdiği için kullanıcı YouTube başlığını değiştirse bile konu
+  // hafızası kaybolmaz. Geçmiş günler de kalıcı olarak tekrar havuzundan çıkarılır.
+  const completedPlanSubjects = state.plan
+    .filter((item) => item.date <= today)
+    .map((item) => item.title)
+    .filter(Boolean);
+
+  const coveredSubjects = [...new Set([...previous, ...completedPlanSubjects])].slice(-2000);
+  const basePlanning = state.planning || {
+    weekKey: currentIstanbulWeekKey(),
+    generatedAt: new Date(0).toISOString(),
+  };
+
+  return {
+    ...state,
+    planning: {
+      ...basePlanning,
+      coveredSubjects,
+      plannerVersion: PLANNER_VERSION,
+    },
+  } as ChannelState;
+}
+
 /**
  * Canlı metrikler iki dakikada bir yenilenebilir; içerik listesi iki dakikada bir
- * değişmez. Konular gün boyunca sabit kalır. Gelecek 30 günlük plan en fazla günde
- * bir kez, İstanbul saatiyle 21:00 sonrasında yeni sonuçlarla yeniden sıralanır.
+ * değişmez. Konular gün boyunca sabit kalır. Yeni plan motoru sürümü geldiğinde ise
+ * mevcut plan bir kez zorunlu yenilenir; böylece eski tekrar hataları ekranda kalmaz.
  */
 export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
+  if ((planningMemory(state)?.plannerVersion || 0) !== PLANNER_VERSION) return true;
+
   const current = istanbulParts(now);
   if (current.hour < DAILY_PLAN_REFRESH_HOUR_VALUE) return false;
   const generatedAt = new Date(state.planning.generatedAt);
@@ -60,6 +100,7 @@ export function mergeGeneratedPlanPreservingToday(
     ? lockedToday
     : generated.filter((item) => item.date === today);
   const futurePlan = generated.filter((item) => item.date > today);
+  const memory = planningMemory(state);
 
   return {
     ...state,
@@ -68,8 +109,10 @@ export function mergeGeneratedPlanPreservingToday(
       weekKey: currentIstanbulWeekKey(),
       generatedAt: new Date().toISOString(),
       weeklySchedule,
+      coveredSubjects: memory?.coveredSubjects || [],
+      plannerVersion: PLANNER_VERSION,
     },
-  };
+  } as ChannelState;
 }
 
 export function rebuildFuturePlan(
@@ -77,8 +120,9 @@ export function rebuildFuturePlan(
   weeklySchedule: WeeklyScheduleDay[],
   now = new Date(),
 ) {
-  const generated = generateChannelDrivenPlan(state, weeklySchedule);
-  return mergeGeneratedPlanPreservingToday(state, generated, weeklySchedule, now);
+  const stateWithMemory = archiveCoveredSubjects(state, now);
+  const generated = generateChannelDrivenPlan(stateWithMemory, weeklySchedule);
+  return mergeGeneratedPlanPreservingToday(stateWithMemory, generated, weeklySchedule, now);
 }
 
 export function maybeRefreshFuturePlan(
