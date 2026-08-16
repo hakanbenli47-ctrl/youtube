@@ -1,409 +1,288 @@
 import "server-only";
-
 import { addDays, format } from "date-fns";
 import { tr } from "date-fns/locale";
-import { detectHistoryTopic, detectOttomanRuler, titleSimilarity } from "./history";
-import type { ChannelState, PlanItem, VideoMetric, WeeklyScheduleDay } from "./schema";
-import { buildViralTopicCandidates } from "./topic-sourcing";
+import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
-type Objective = "İzlenme" | "Abone" | "Beğeni";
-type EventFamily =
-  | "conquest"
-  | "loss"
-  | "campaign"
-  | "rebellion"
-  | "battle"
-  | "treaty"
-  | "crisis"
-  | "reform"
-  | "institution"
-  | "person"
-  | "other";
+type ShortObjective = "İzlenme" | "Abone" | "Beğeni";
 
-type LaneId =
-  | "conquest-loss"
-  | "ruler-intrigue"
-  | "throne-dynasty"
-  | "war-siege"
-  | "army-reform"
-  | "rebellion-crisis";
+const PLAN_START = new Date("2026-08-17T12:00:00+03:00");
+const PLAN_DAYS = 30;
+const SHORT_OBJECTIVES: ShortObjective[] = ["İzlenme", "Abone", "Beğeni", "İzlenme", "Abone", "Beğeni"];
 
-type FixedLane = {
-  id: LaneId;
-  label: string;
-  keywords: RegExp;
-  familyWeights: Partial<Record<EventFamily, number>>;
+// Bu dosyada kategori ve konular bilerek tamamen sabittir.
+// Kanal verisi, trend, benzerlik, otomatik konu üretimi veya yeniden sıralama kullanılmaz.
+// 17 Ağustos 2026 - 15 Eylül 2026 arasındaki 180 Shorts konusu manuel olarak kilitlidir.
+const STATIC_SHORT_LANES = [
+  {
+    time: "09:00",
+    pillar: "Taht & Hanedan",
+    topics: [
+      "Şehzade Orhan’ın Bizans’a Sığınışı",
+      "Osmanlı’da Şehzadelerin Sancağa Çıkma Usulünün Sona Ermesi",
+      "III. Mehmed’in Şehzade Mahmud’u İdam Ettirmesi",
+      "I. Ahmed’in Şehzade Mustafa’yı Öldürmeyerek Hanedan Düzenini Değiştirmesi",
+      "Ekber ve Erşed Sistemine Geçiş",
+      "Mustafa I’in İki Kez Tahta Çıkışı",
+      "Genç Osman’ın Tahttan İndirilmesi",
+      "IV. Murad’ın Çocuk Yaşta Tahta Çıkışı",
+      "Kösem Sultan ile Turhan Sultan Arasındaki Naibelik Mücadelesi",
+      "IV. Mehmed’in Çocuk Yaşta Tahta Çıkışı",
+      "II. Süleyman’ın 39 Yıllık Kafes Hayatından Sonra Tahta Çıkışı",
+      "II. Ahmed’in Kafes Hayatından Sonra Padişah Oluşu",
+      "II. Mustafa’nın Edirne Vakası Sonrası Tahttan İndirilmesi",
+      "III. Ahmed’in Patrona Halil İsyanı Sonrası Tahttan Çekilişi",
+      "I. Mahmud’un İsyan Ortasında Tahta Çıkışı",
+      "III. Selim’in Tahttan İndirilmesi",
+      "IV. Mustafa’nın Tahtı Korumak İçin Şehzadeleri Öldürtme Girişimi",
+      "II. Mahmud’un Alemdar Mustafa Paşa Sayesinde Tahta Çıkışı",
+      "Sultan Abdülaziz’in 1876’da Tahttan İndirilmesi",
+      "V. Murad’ın 93 Günlük Saltanatı",
+      "II. Abdülhamid’in 1909’da Tahttan İndirilmesi",
+      "Şehzadelerin Kafes Usulünde Yetiştirilmesi",
+      "Cülus Bahşişinin Taht Değişimlerinde Yarattığı Baskı",
+      "Valide Sultanların Naibelik Dönemleri",
+      "Hanedan Kızlarının Siyasi Evlilikleri",
+      "Şehzadelerin Sarayda Eğitim Düzeni",
+      "Osmanlı’da Kardeş Katli Kanununun Uygulanışı",
+      "Şehzade Bayezid’in Safevilere Sığınışı",
+      "Cem Sultan’ın Avrupa’da Siyasi Rehineye Dönüşmesi",
+      "Osmanlı Hanedanının 1924 Sürgünü",
+    ],
+  },
+  {
+    time: "11:00",
+    pillar: "Padişah Kararları & Reformlar",
+    topics: [
+      "Fatih’in Arnavutluk Seferleri",
+      "III. Murad’ın İngiltere’ye Ticari İmtiyazlar Vermesi",
+      "Sokollu Mehmed Paşa’nın Don-Volga Kanalı Projesi",
+      "IV. Murad’ın Kahvehane ve Tütün Yasakları",
+      "Köprülü Mehmed Paşa’nın Sadrazamlığı Şartla Kabul Etmesi",
+      "II. Mustafa’nın Sarayı Edirne’ye Taşıması",
+      "III. Ahmed’in Avrupa’yı Yakından İzleme Politikası",
+      "Yirmisekiz Çelebi Mehmed’in Paris Elçiliği",
+      "I. Mahmud’un Humbaracı Ahmed Paşa’yı Göreve Getirmesi",
+      "III. Selim’in Daimi Elçilikler Kurması",
+      "III. Selim’in Nizam-ı Cedid’i Kurma Kararı",
+      "II. Mahmud’un Yeniçeri Ocağını Kaldırma Kararı",
+      "II. Mahmud’un Devlet Memurlarına Yeni Kıyafet Düzeni Getirmesi",
+      "II. Mahmud’un Takvim-i Vekayi’yi Çıkarması",
+      "Abdülmecid’in Tanzimat Fermanını İlan Etmesi",
+      "Abdülmecid Döneminde İlk Dış Borcun Alınması",
+      "Abdülaziz’in Avrupa Seyahati",
+      "Abdülaziz’in Donanmaya Yaptığı Büyük Yatırım",
+      "II. Abdülhamid’in Yıldız Sarayı Yönetim Sistemi",
+      "II. Abdülhamid’in Telgraf Ağını Genişletmesi",
+      "II. Abdülhamid’in Hicaz Demiryolu Kararı",
+      "II. Abdülhamid’in Eğitim Ağı ve İdadiler",
+      "Ertuğrul Fırkateyni’nin Japonya’ya Gönderilmesi",
+      "Sultan Reşad’ın Rumeli Seyahati",
+      "II. Mahmud’un Sened-i İttifak’ı Onaylaması",
+      "III. Selim’in Selimiye Kışlasını Kurması",
+      "Abdülmecid’in Dolmabahçe Sarayı’na Geçişi",
+      "Abdülaziz’in Mısır Seyahati",
+      "II. Abdülhamid’in II. Wilhelm’i İstanbul’da Ağırlaması",
+      "Osmanlı’nın Süveyş Kanalı Sonrası Kızıldeniz Politikasını Değiştirmesi",
+    ],
+  },
+  {
+    time: "13:00",
+    pillar: "Büyük Sefer & Diplomasi",
+    topics: [
+      "Prut Seferi ve Çar Petro’nun Kuşatılması",
+      "Osmanlı’nın Lehistan Veraset Savaşı’na Müdahalesi",
+      "1736-1739 Osmanlı-Rus-Avusturya Savaşı ve Belgrad Barışı",
+      "Nadir Şah ile Osmanlı Arasındaki Sınır Mücadelesi",
+      "Kerden Antlaşması ve Osmanlı-İran Sınırının Korunması",
+      "Aynalıkavak Tenkihnamesi ve Kırım Krizi",
+      "Kırım’ın Rusya Tarafından İlhakı Sonrası Osmanlı Diplomasisi",
+      "Yaş Antlaşması ve Kırım’ın Kaybının Kesinleşmesi",
+      "Napolyon’un Mısır’ı İşgali Sonrası Osmanlı-İngiliz İttifakı",
+      "Osmanlı-Fransız İlişkilerinin 1802 Paris Antlaşması’yla Yeniden Kurulması",
+      "Bükreş Antlaşması 1812 ve Besarabya’nın Kaybı",
+      "Akkerman Antlaşması 1826 ve Rus Baskısı",
+      "Londra Antlaşması 1827 ve Yunan Meselesi",
+      "Edirne Antlaşması 1829 ve Balkanlardaki Yeni Düzen",
+      "Hünkâr İskelesi Antlaşması ve Rus Koruması",
+      "Kütahya Antlaşması ve Mehmed Ali Paşa Krizi",
+      "Londra Boğazlar Sözleşmesi 1841",
+      "Paris Antlaşması 1856 ve Osmanlı’nın Avrupa Devletler Sistemine Girişi",
+      "Islahat Fermanı’nın Paris Konferansı Öncesi İlanı",
+      "1878 Kıbrıs Sözleşmesi ve İngiltere ile Gizli Pazarlık",
+      "Berlin Kongresi’nde Osmanlı Topraklarının Yeniden Paylaşılması",
+      "Muharrem Kararnamesi ve Düyun-u Umumiye’ye Giden Süreç",
+      "1897 Osmanlı-Yunan Savaşı Sonrası İstanbul Antlaşması",
+      "Uşi Antlaşması ve Trablusgarp’ın Bırakılması",
+      "Londra Antlaşması 1913 ve Balkan Sınırları",
+      "Bükreş Antlaşması 1913 ve Balkan Dengeleri",
+      "Osmanlı-Alman İttifakı 1914",
+      "Goeben ve Breslau’nun Osmanlı’ya Sığınması",
+      "Brest-Litovsk Sonrası Osmanlı’nın Kafkasya Kazanımları",
+      "Mondros Mütarekesi’nin Osmanlı Ordusuna Getirdiği Şartlar",
+    ],
+  },
+  {
+    time: "15:00",
+    pillar: "Savaş & Deniz Muharebeleri",
+    topics: [
+      "Navarin Faciası",
+      "Çıldır Savaşı 1578",
+      "Meşaleler Savaşı 1583",
+      "Haçova Savaşı 1596",
+      "Cecora Savaşı 1620",
+      "Hotin Seferi 1621",
+      "Saint Gotthard Savaşı 1664",
+      "Kamaniçe Seferi 1672",
+      "Parkany Muharebeleri 1683",
+      "Salankamen Savaşı 1691",
+      "Zenta Savaşı 1697",
+      "Petrovaradin Savaşı 1716",
+      "Grocka Savaşı 1739",
+      "Kagul Savaşı 1770",
+      "Kozluca Savaşı 1774",
+      "Fokşani Savaşı 1789",
+      "Rymnik Savaşı 1789",
+      "İngiliz Donanmasının Çanakkale Boğazı’na Girişi 1807",
+      "Varna Kuşatması 1828",
+      "Kuleviça Savaşı 1829",
+      "Sinop Baskını 1853",
+      "Silistre Kuşatması 1854",
+      "Kars Savunması 1855",
+      "Dömeke Savaşı 1897",
+      "Kumanova Savaşı 1912",
+      "Çatalca Savunması 1912",
+      "Bolayır Muharebesi 1913",
+      "Birinci Gazze Savaşı 1917",
+      "İkinci Gazze Savaşı 1917",
+      "Üçüncü Gazze Savaşı 1917",
+    ],
+  },
+  {
+    time: "17:00",
+    pillar: "Fetih & Toprak Kazanımı/Kaybı",
+    topics: [
+      "Belgrad’ın 1739’da Geri Alınışı",
+      "Kefe’nin Osmanlı’ya Katılması",
+      "Tunus’un 1574’te Kesin Olarak Alınması",
+      "Revan’ın 1635’te Alınması",
+      "Bağdat’ın 1638’de Geri Alınması",
+      "Yanova’nın 1660’ta Alınması",
+      "Uyvar’ın 1663’te Alınması",
+      "Kandiye’nin 1669’da Alınması",
+      "Kamaniçe’nin 1672’de Alınması",
+      "Azak’ın 1700’de Kaybı",
+      "Mora’nın 1715’te Geri Alınması",
+      "Temeşvar’ın 1716’da Kaybı",
+      "Belgrad’ın 1717’de Kaybı",
+      "Orşova’nın 1738’de Geri Alınması",
+      "Hotin’in 1812’de Kaybı",
+      "Cezayir’in 1830’da Fransa Tarafından İşgali",
+      "Mora’da Osmanlı Egemenliğinin Sona Ermesi",
+      "Kars Ardahan ve Batum’un 1878’de Rusya’ya Bırakılması",
+      "Bosna-Hersek’in 1878’de Avusturya Tarafından İşgali",
+      "Tunus’un 1881’de Fransa Himayesine Girmesi",
+      "Mısır’ın 1882’de İngiltere Tarafından İşgali",
+      "Bosna-Hersek’in 1908’de Avusturya Tarafından İlhakı",
+      "Selanik’in 1912’de Kaybı",
+      "Yanya’nın 1913’te Kaybı",
+      "İşkodra’nın 1913’te Kaybı",
+      "Edirne’nin 1913’te Geri Alınışı",
+      "Batum’un 1918’de Osmanlı’ya Geri Dönüşü",
+      "Bakü’nün 1918’de Kafkas İslam Ordusu Tarafından Alınışı",
+      "Musul’un 1918’de İngilizler Tarafından İşgali",
+      "İstanbul’un 1918’de İtilaf Donanması Tarafından Fiilen İşgali",
+    ],
+  },
+  {
+    time: "19:00",
+    pillar: "İsyan & Büyük Kriz",
+    topics: [
+      "1687 Mohaç Yenilgisi ve IV. Mehmed’in Tahttan İndirilmesi",
+      "Karayazıcı Abdülhalim İsyanı",
+      "Deli Hasan İsyanı",
+      "Canbolatoğlu Ali Paşa İsyanı",
+      "Abaza Mehmed Paşa İsyanı",
+      "Vak’a-i Vakvakiye 1656",
+      "Edirne Vakası 1703",
+      "Patrona Halil İsyanı 1730",
+      "Kabakçı Mustafa İsyanı 1807",
+      "Alemdar Mustafa Paşa Vakası 1808",
+      "Tepedelenli Ali Paşa İsyanı",
+      "Mora İsyanı 1821",
+      "Bosna Ayaklanması 1831",
+      "Kuleli Vakası 1859",
+      "Girit İsyanı 1866",
+      "Selanik Vakası 1876",
+      "Bulgar Nisan Ayaklanması 1876",
+      "Çerkez Hasan Vakası 1876",
+      "Ali Suavi’nin Çırağan Baskını 1878",
+      "Girit Krizi 1897",
+      "İlinden İsyanı 1903",
+      "1908 Jön Türk Devrimi ve II. Meşrutiyet",
+      "31 Mart Vakası 1909",
+      "Arnavutluk İsyanı 1910",
+      "Yemen’de İmam Yahya İsyanı 1911",
+      "Arnavutluk İsyanı 1912",
+      "Babıali Baskını 1913",
+      "Mahmud Şevket Paşa Suikastı 1913",
+      "Hicaz İsyanı 1916",
+      "Şam’ın 1918’de Kaybıyla Sonuçlanan Cephe Çöküşü",
+    ],
+  },
+] as const;
+
+const STATIC_LONG_VIDEOS: Record<number, string> = {
+  3: "Malta Kuşatması 1565: Osmanlı Neden Adayı Alamadı?",
+  10: "Çanakkale Savaşı 1915: Boğazı Geçemeyen İtilaf Donanması",
+  17: "Kutü’l-Amare 1916: Bir İngiliz Ordusu Nasıl Teslim Oldu?",
+  24: "93 Harbi 1877-1878: Plevne’den Ayastefanos’a",
 };
-
-type Candidate = {
-  subject: string;
-  sourceTitle: string;
-  family: EventFamily;
-  topic: string;
-  ruler: string;
-  viewScore: number;
-  subscriberScore: number;
-  likeScore: number;
-  evidenceSamples: number;
-  viralBonus: number;
-};
-
-type PlanningMemory = {
-  coveredSubjects?: string[];
-  plannerVersion?: number;
-};
-
-const DAY_MS = 86_400_000;
-const SUBJECT_PREFIX = "Yeni konu evreni:";
-const FIXED_SHORT_TIMES = ["09:00", "11:00", "13:00", "15:00", "17:00", "19:00"];
-const DEFAULT_OBJECTIVES: Objective[] = ["İzlenme", "Abone", "Beğeni", "İzlenme", "Abone", "Beğeni"];
-
-// Kanalın şimdiye kadarki kazanan desenleri artık altı sabit içerik hattına ayrılıyor.
-// Başlık/olay her gün değişir; kategori ve yayın sırası değişmez.
-const FIXED_LANES: FixedLane[] = [
-  {
-    id: "conquest-loss",
-    label: "Fetih & Toprak Kazanımı/Kaybı",
-    keywords: /fetih|fethi|alınış|alinis|alınması|alinmasi|ele geç|ele gec|kayb|düşüş|dusus|elden çık|elden cik|toprak|kale|şehir|sehir/,
-    familyWeights: { conquest: 72, loss: 72, treaty: 34, campaign: 20 },
-  },
-  {
-    id: "ruler-intrigue",
-    label: "Padişah Kararları & Saray/Diplomasi",
-    keywords: /padişah|padisah|sultan|paşa|pasa|vezir|sadrazam|harem|valide|saray|elçi|elci|diplomasi|ittifak|evlilik|seyahat|ferman|kanunname/,
-    familyWeights: { person: 58, treaty: 48, other: 26, reform: 22, crisis: 18 },
-  },
-  {
-    id: "throne-dynasty",
-    label: "Taht & Hanedan Mücadelesi",
-    keywords: /taht|şehzade|sehzade|hanedan|veraset|kardeş|kardes|cülus|culus|kafes|sürgün|surgun|cem sultan|tahttan|saltanat|miras/,
-    familyWeights: { crisis: 64, person: 46, rebellion: 32, other: 22 },
-  },
-  {
-    id: "war-siege",
-    label: "Savaş & Kuşatma",
-    keywords: /savaş|savas|muharebe|kuşatma|kusatma|sefer|harekat|harekât|savunma|baskın|baskin|zafer|cephe|donanma savaşı|deniz savaşı/,
-    familyWeights: { battle: 78, campaign: 72, conquest: 34, loss: 34 },
-  },
-  {
-    id: "army-reform",
-    label: "Ordu & Reform/Teknoloji",
-    keywords: /ordu|asker|yeniçeri|yeniceri|ocak|topçu|topcu|donanma|tersane|nizam|reform|mekteb|tımar|timar|devşirme|devsirme|silah|top dök|top dok|humbar|lağım|lagim|zırhlı|zirhli|teknoloji/,
-    familyWeights: { reform: 76, institution: 70, person: 22, other: 18 },
-  },
-  {
-    id: "rebellion-crisis",
-    label: "İsyan & Büyük Kriz",
-    keywords: /isyan|ayaklan|vakası|vakasi|kriz|suikast|baskını|baskini|darbe|tahttan indir|bozgun|felaket|işgal|isgal|ihanet|kargaşa|kargasa/,
-    familyWeights: { rebellion: 80, crisis: 76, loss: 28, treaty: 16 },
-  },
-];
-
-const LONG_VIDEO_LANE: FixedLane = {
-  id: "war-siege",
-  label: "Uzun Video — Büyük Savaş/Sefer Dosyası",
-  keywords: /savaş|savas|muharebe|kuşatma|kusatma|sefer|harekat|harekât|savunma|fetih|fethi|cephe|donanma/,
-  familyWeights: { battle: 84, campaign: 80, conquest: 62, loss: 44 },
-};
-
-const NOISE_WORDS = new Set([
-  "acaba", "ama", "asıl", "asil", "bir", "bu", "daha", "değil", "degil", "gerçekte", "gercekte",
-  "hakkında", "hakkinda", "hangi", "için", "icin", "kadar", "mi", "mı", "mu", "mü", "nasıl", "nasil",
-  "neden", "neydi", "oldu", "olarak", "osmanlı", "osmanli", "tarih", "tarihi", "ve", "veya", "sonra",
-  "dengeleri", "etkiledi", "önemliydi", "onemliydi", "kritik", "ayrıntı", "ayrinti", "konusu", "olayı", "olayi",
-]);
-
-const RULER_ONLY_WORDS = new Set([
-  "osman", "orhan", "murad", "bayezid", "mehmed", "mehmet", "selim", "süleyman", "suleyman", "ahmed", "ahmet",
-  "mustafa", "mahmud", "abdülhamid", "abdulhamid", "kanuni", "fatih", "yavuz", "genç", "genc", "ibrahim",
-]);
-
-function clamp(value: number, minimum: number, maximum: number) {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function normalize(value: string) {
-  return value
-    .toLocaleLowerCase("tr-TR")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9çğıöşü\s]/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function words(value: string) {
-  return normalize(value).split(/\s+/).filter(Boolean);
-}
-
-function qualifiers(value: string) {
-  return new Set(words(value).filter((word) => /^(?:i|ii|iii|iv|v|vi|vii|viii|ix|x|birinci|ikinci|üçüncü|ucuncu|dördüncü|dorduncu|\d{3,4})$/.test(word)));
-}
-
-function meaningfulWords(value: string) {
-  return new Set(words(value).filter((word) => word.length >= 3 && !NOISE_WORDS.has(word)));
-}
-
-function family(value: string): EventFamily {
-  const n = normalize(value);
-  if (/feth|fetih|alın|alin|ele geç|ele gec|yönetimine geç|yonetimine gec|geri alın|geri alin/.test(n)) return "conquest";
-  if (/kayb|kayıp|kayip|düş|dus|elden çık|elden cik|işgal|isgal/.test(n)) return "loss";
-  if (/sefer|harekat|harekât|yürü|yuru|kuşat|kusat|savunma/.test(n)) return "campaign";
-  if (/isyan|ayaklan|başkaldır|baskaldir/.test(n)) return "rebellion";
-  if (/savaş|savas|muharebe|zafer|baskın|baskin/.test(n)) return "battle";
-  if (/antlaşma|antlasma|mütareke|mutareke|konferans/.test(n)) return "treaty";
-  if (/kriz|vakası|vakasi|olayı|olayi|tahttan indir|suikast|darbe/.test(n)) return "crisis";
-  if (/reform|kanun|ferman|meşrutiyet|mesrutiyet|cedid|kıyafet|kiyafet/.test(n)) return "reform";
-  if (/sistem|teşkilat|teskilat|ocak|divan|vakıf|vakif|mekteb|nezaret|hazine|lonca|tersane|demiryolu|telgraf/.test(n)) return "institution";
-  if (/paşa|pasa|reis|sultan|çelebi|celebi|mimar|evliya|katip|kâtip|valide/.test(n)) return "person";
-  return "other";
-}
-
-function overlap(left: string, right: string) {
-  const a = meaningfulWords(left);
-  const b = meaningfulWords(right);
-  const shared = [...a].filter((word) => b.has(word));
-  const containment = shared.length / Math.max(1, Math.min(a.size, b.size));
-  return { shared, containment };
-}
-
-/**
- * Yayındaki bütün başlıklar (kullanıcının mevcut 96+ konusu) sert engel listesidir.
- * Aynı olay farklı hook ile yazılsa bile plan havuzuna geri giremez. Aynı yer adında
- * gerçekten farklı olayları ayırmak için iki tarafta da yıl/sıra bilgisi varsa farklı
- * niteleyiciler çakışma sayılmaz.
- */
-function sameHistoricalSubject(left: string, right: string) {
-  const a = normalize(left);
-  const b = normalize(right);
-  if (!a || !b) return false;
-  if (a === b || (a.length >= 10 && b.includes(a)) || (b.length >= 10 && a.includes(b))) return true;
-
-  const leftQualifiers = qualifiers(left);
-  const rightQualifiers = qualifiers(right);
-  if (leftQualifiers.size && rightQualifiers.size) {
-    const sameQualifier = [...leftQualifiers].some((value) => rightQualifiers.has(value));
-    if (!sameQualifier) return false;
-  }
-
-  if (titleSimilarity(left, right) >= 0.32) return true;
-
-  const comparison = overlap(left, right);
-  if (comparison.shared.length >= 3 && comparison.containment >= 0.45) return true;
-  if (comparison.shared.length >= 2 && comparison.containment >= 0.58) return true;
-
-  const leftFamily = family(left);
-  const rightFamily = family(right);
-  const single = comparison.shared[0];
-  if (
-    comparison.shared.length === 1 &&
-    leftFamily === rightFamily &&
-    leftFamily !== "other" &&
-    single &&
-    single.length >= 5 &&
-    !RULER_ONLY_WORDS.has(single) &&
-    comparison.containment >= 0.5
-  ) return true;
-
-  return false;
-}
-
-function subjectFromSource(title: string, sourceTitle: string) {
-  if (sourceTitle.startsWith(SUBJECT_PREFIX)) return sourceTitle.slice(SUBJECT_PREFIX.length).trim();
-  return sourceTitle || title;
-}
-
-function videoAgeDays(video: VideoMetric) {
-  const published = new Date(video.publishedAt).getTime();
-  return Number.isFinite(published) ? Math.max(0.25, (Date.now() - published) / DAY_MS) : 365;
-}
-
-function objectiveValue(video: VideoMetric, objective: Objective) {
-  const retention = video.avgViewPercentage > 0 ? clamp(video.avgViewPercentage / 80, 0.65, 1.35) : 1;
-  const engaged = (video.engagedViewRate || 0) > 0 ? clamp((video.engagedViewRate || 0) / 60, 0.7, 1.3) : 1;
-  const quality = Math.sqrt(retention * engaged);
-  if (objective === "Abone") {
-    const net = Math.max(0, video.subscribersGained - video.subscribersLost);
-    return (net / Math.max(video.analyticsViews || video.views, 1)) * 1000 * quality;
-  }
-  if (objective === "Beğeni") return (video.likes / Math.max(video.views, 1)) * 1000 * quality;
-  const speed = video.recentVelocity || (video.engagedViews || video.views) / Math.max(1, Math.min(21, videoAgeDays(video)));
-  return Math.log10(speed + 10) * 25 * quality;
-}
-
-function themeRelevance(subject: string, video: VideoMetric) {
-  let score = 0.06;
-  if (detectHistoryTopic(subject) === detectHistoryTopic(video.title)) score += 0.38;
-  if (family(subject) === family(video.title) && family(subject) !== "other") score += 0.28;
-  const subjectRuler = detectOttomanRuler(subject);
-  const videoRuler = detectOttomanRuler(video.title);
-  if (subjectRuler !== "Diğer Osmanlı" && subjectRuler === videoRuler) score += 0.18;
-  score += Math.min(0.28, titleSimilarity(subject, video.title) * 0.7);
-  return clamp(score, 0.06, 1);
-}
-
-function evidenceFor(state: ChannelState, subject: string, objective: Objective) {
-  const rows = state.videos
-    .filter((video) => video.contentType === "SHORT" && video.views > 0)
-    .map((video) => ({ video, relevance: themeRelevance(subject, video) }))
-    .sort((left, right) => right.relevance - left.relevance || right.video.views - left.video.views)
-    .slice(0, 12);
-  if (!rows.length) return { score: 0, samples: 0 };
-  const weight = rows.reduce((sum, row) => sum + row.relevance, 0);
-  const score = rows.reduce((sum, row) => sum + objectiveValue(row.video, objective) * row.relevance, 0) / Math.max(weight, 0.001);
-  return { score, samples: rows.filter((row) => row.relevance >= 0.34).length };
-}
-
-function laneFit(candidate: Candidate, lane: FixedLane) {
-  const normalized = normalize(candidate.subject);
-  let score = lane.familyWeights[candidate.family] || 0;
-  if (lane.keywords.test(normalized)) score += 72;
-
-  const topic = candidate.topic;
-  if (lane.id === "war-siege" && topic === "Fetih & Savaş") score += 28;
-  if (lane.id === "throne-dynasty" && topic === "Taht & Hanedan") score += 36;
-  if (lane.id === "army-reform" && topic === "Kurumlar & Ordu") score += 36;
-  if (lane.id === "ruler-intrigue" && (topic === "Padişahların Kararları" || topic === "Saray & Gündelik Hayat" || topic === "Diplomasi & İttifaklar")) score += 30;
-  if (lane.id === "conquest-loss" && topic === "Fetih & Savaş") score += 16;
-  if (lane.id === "rebellion-crisis" && (topic === "Taht & Hanedan" || candidate.family === "crisis" || candidate.family === "rebellion")) score += 22;
-  return score;
-}
-
-function buildCandidatePool(state: ChannelState) {
-  const published = state.videos.map((video) => video.title).filter(Boolean);
-  const memory = ((state.planning as (typeof state.planning & PlanningMemory) | undefined)?.coveredSubjects || []).filter(Boolean);
-  const blocked = [...published, ...memory];
-  const all = buildViralTopicCandidates(state, 0);
-  const fresh = all.filter((item) => item.sourceTitle.startsWith(SUBJECT_PREFIX));
-  const source = fresh.length >= 160 ? fresh : all;
-  const candidates: Candidate[] = [];
-
-  source.forEach((item) => {
-    const subject = subjectFromSource(item.title, item.sourceTitle);
-    if (!subject) return;
-    if (blocked.some((covered) => sameHistoricalSubject(subject, covered))) return;
-    if (candidates.some((candidate) => sameHistoricalSubject(subject, candidate.subject))) return;
-
-    const view = evidenceFor(state, subject, "İzlenme");
-    const subscriber = evidenceFor(state, subject, "Abone");
-    const like = evidenceFor(state, subject, "Beğeni");
-    candidates.push({
-      subject,
-      sourceTitle: item.sourceTitle,
-      family: family(subject),
-      topic: detectHistoryTopic(subject),
-      ruler: detectOttomanRuler(subject),
-      viewScore: view.score,
-      subscriberScore: subscriber.score,
-      likeScore: like.score,
-      evidenceSamples: Math.max(view.samples, subscriber.samples, like.samples),
-      viralBonus: item.viralBonus,
-    });
-  });
-
-  return candidates;
-}
-
-function candidateScore(candidate: Candidate, objective: Objective, lane: FixedLane) {
-  const evidence = objective === "Abone"
-    ? candidate.subscriberScore * 17
-    : objective === "Beğeni"
-      ? candidate.likeScore * 0.88
-      : candidate.viewScore * 1.2;
-  const confidence = Math.min(12, candidate.evidenceSamples * 1.4);
-  return laneFit(candidate, lane) * 1.45 + evidence + confidence + candidate.viralBonus * 0.1;
-}
-
-function selectCandidate(
-  candidates: Candidate[],
-  lane: FixedLane,
-  objective: Objective,
-  used: Candidate[],
-  seed: number,
-) {
-  const available = candidates.filter((candidate) =>
-    !used.some((usedCandidate) => sameHistoricalSubject(usedCandidate.subject, candidate.subject)));
-  if (!available.length) return null;
-
-  const matching = available.filter((candidate) => laneFit(candidate, lane) >= 48);
-  const pool = matching.length ? matching : available.filter((candidate) => laneFit(candidate, lane) >= 24);
-  const finalPool = pool.length ? pool : available;
-  const ranked = finalPool
-    .map((candidate) => ({ candidate, score: candidateScore(candidate, objective, lane) }))
-    .sort((left, right) => right.score - left.score || left.candidate.subject.localeCompare(right.candidate.subject, "tr"));
-
-  const top = ranked.slice(0, Math.min(4, ranked.length));
-  return top[seed % top.length]?.candidate || ranked[0]?.candidate || null;
-}
-
-function istanbulTodayAtNoon() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Istanbul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
-  return new Date(`${get("year")}-${get("month")}-${get("day")}T12:00:00+03:00`);
-}
-
-function shortObjective(schedule: WeeklyScheduleDay, time: string, index: number): Objective {
-  return (schedule.shortSlots?.find((slot) => slot.time === time)?.objective as Objective | undefined) || DEFAULT_OBJECTIVES[index];
-}
 
 function shortPlanItem(
-  state: ChannelState,
-  candidate: Candidate,
-  lane: FixedLane,
-  objective: Objective,
   dateKey: string,
   dayLabel: string,
-  time: string,
+  dayIndex: number,
   slotIndex: number,
 ): PlanItem {
-  const publishedCount = state.videos.length;
+  const lane = STATIC_SHORT_LANES[slotIndex];
+  const title = lane.topics[dayIndex];
+  const objective = SHORT_OBJECTIVES[slotIndex];
   return {
     id: `${dateKey}-short-${slotIndex}`,
     date: dateKey,
     dayLabel,
     format: "Shorts",
-    title: candidate.subject,
+    title,
     hook: "",
     duration: "45–60 sn",
-    publishTime: time,
-    pillar: lane.label,
+    publishTime: lane.time,
+    pillar: lane.pillar,
     objective,
-    priority: slotIndex === 3 || slotIndex === 4 ? "Yüksek" : "Normal",
-    reason: `${lane.label} sabit içerik hattı. Kanaldaki ${publishedCount} yayın başlığı ve kalıcı konu hafızası tekrar engeli olarak kontrol edildi; seçim aynı kategorideki gerçek izlenme, tutma, beğeni ve abone sinyallerine göre yapıldı.`,
+    priority: slotIndex === 2 || slotIndex === 3 || slotIndex === 5 ? "Yüksek" : "Normal",
+    reason: "Manuel sabit konu planı. Kategori, saat ve konu otomatik olarak değiştirilemez.",
     voiceover: "",
     description: "",
     hashtags: [],
     cta: "",
     estimatedSeconds: 55,
-    strategyMode: candidate.evidenceSamples >= 5 ? "Kazananı büyüt" : candidate.evidenceSamples >= 2 ? "Denge" : "Kontrollü test",
+    strategyMode: "Kazananı büyüt",
   };
 }
 
-function longPlanItem(
-  state: ChannelState,
-  candidate: Candidate,
-  dateKey: string,
-  dayLabel: string,
-  time: string,
-): PlanItem {
+function longPlanItem(dateKey: string, dayLabel: string, title: string): PlanItem {
   return {
     id: `${dateKey}-long`,
     date: dateKey,
     dayLabel,
     format: "Uzun Video",
-    title: candidate.subject,
+    title,
     hook: "",
     duration: "8–12 dk",
-    publishTime: time,
-    pillar: LONG_VIDEO_LANE.label,
+    publishTime: "20:30",
+    pillar: "Uzun Video — Büyük Savaş/Sefer Dosyası",
     objective: "İzlenme Süresi",
     priority: "Yüksek",
-    reason: `Haftada bir sabit uzun video. Büyük savaş/sefer dosyası seçilir; kanaldaki ${state.videos.length} yayınlanmış konu ve daha önce planlanıp tamamlanan konular tekrar kullanılamaz.`,
+    reason: "Perşembe 20:30 sabit uzun video planı. Konu manuel olarak kilitlidir.",
     voiceover: "",
     description: "",
     hashtags: [],
@@ -414,50 +293,22 @@ function longPlanItem(
 }
 
 export function generateChannelDrivenPlan(
-  state: ChannelState,
-  adaptiveSchedule: WeeklyScheduleDay[],
+  _state: ChannelState,
+  _adaptiveSchedule: WeeklyScheduleDay[],
 ): PlanItem[] {
-  const start = istanbulTodayAtNoon();
-  const candidates = buildCandidatePool(state);
   const plan: PlanItem[] = [];
-  const used: Candidate[] = [];
 
-  for (let dayIndex = 0; dayIndex < 30; dayIndex += 1) {
-    const date = addDays(start, dayIndex);
+  for (let dayIndex = 0; dayIndex < PLAN_DAYS; dayIndex += 1) {
+    const date = addDays(PLAN_START, dayIndex);
     const dateKey = format(date, "yyyy-MM-dd");
     const dayLabel = format(date, "EEEE", { locale: tr });
-    const schedule = adaptiveSchedule.find((item) => item.day === date.getDay());
-    if (!schedule) continue;
 
-    for (let slotIndex = 0; slotIndex < FIXED_SHORT_TIMES.length; slotIndex += 1) {
-      const time = FIXED_SHORT_TIMES[slotIndex];
-      const lane = FIXED_LANES[slotIndex];
-      const objective = shortObjective(schedule, time, slotIndex);
-      const candidate = selectCandidate(
-        candidates,
-        lane,
-        objective,
-        used,
-        dayIndex * 29 + slotIndex * 13,
-      );
-      if (!candidate) continue;
-      used.push(candidate);
-      plan.push(shortPlanItem(state, candidate, lane, objective, dateKey, dayLabel, time, slotIndex));
+    for (let slotIndex = 0; slotIndex < STATIC_SHORT_LANES.length; slotIndex += 1) {
+      plan.push(shortPlanItem(dateKey, dayLabel, dayIndex, slotIndex));
     }
 
-    if (schedule.longVideoTime) {
-      const candidate = selectCandidate(
-        candidates,
-        LONG_VIDEO_LANE,
-        "İzlenme",
-        used,
-        dayIndex * 31 + 7,
-      );
-      if (candidate) {
-        used.push(candidate);
-        plan.push(longPlanItem(state, candidate, dateKey, dayLabel, schedule.longVideoTime));
-      }
-    }
+    const longTitle = STATIC_LONG_VIDEOS[dayIndex];
+    if (longTitle) plan.push(longPlanItem(dateKey, dayLabel, longTitle));
   }
 
   return plan.sort((left, right) => left.date.localeCompare(right.date) || left.publishTime.localeCompare(right.publishTime));
