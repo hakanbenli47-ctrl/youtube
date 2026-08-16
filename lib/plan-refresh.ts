@@ -1,12 +1,12 @@
 import "server-only";
 
-import { generateChannelDrivenPlan } from "./channel-driven-plan";
+import { generateChannelDrivenPlan } from "./fixed-topic-plan";
 import { currentIstanbulWeekKey } from "./scheduling";
 import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
-const PLANNER_VERSION = 3;
+const PLANNER_VERSION = 4;
 
 type PlanningMemory = NonNullable<ChannelState["planning"]> & {
   coveredSubjects?: string[];
@@ -47,15 +47,25 @@ function archiveCoveredSubjects(state: ChannelState, now = new Date()) {
   const today = istanbulParts(now).date;
   const previous = planningMemory(state)?.coveredSubjects || [];
 
-  // Saat 21:00 sonrası günün altı konusu tamamlanmış kabul edilir. Plan başlığı
-  // canonical konuyu içerdiği için kullanıcı YouTube başlığını değiştirse bile konu
-  // hafızası kaybolmaz. Geçmiş günler de kalıcı olarak tekrar havuzundan çıkarılır.
+  // Kanaldaki bütün yayın başlıkları kalıcı konu engel listesine alınır.
+  // Böylece mevcut 96+ konu, başlık biçimi değişse veya eski plan hafızası eksik olsa bile
+  // tekrar aday havuzuna dönmez.
+  const publishedSubjects = state.videos
+    .map((video) => video.title)
+    .filter(Boolean);
+
+  // Saat 21:00 sonrası günün konuları tamamlanmış kabul edilir. Yeni sabit plan motorunda
+  // item.title doğrudan canonical konu başlığıdır; bu yüzden sonraki günlerde yeniden seçilemez.
   const completedPlanSubjects = state.plan
     .filter((item) => item.date <= today)
     .map((item) => item.title)
     .filter(Boolean);
 
-  const coveredSubjects = [...new Set([...previous, ...completedPlanSubjects])].slice(-2000);
+  const coveredSubjects = [...new Set([
+    ...previous,
+    ...publishedSubjects,
+    ...completedPlanSubjects,
+  ])].slice(-4000);
   const basePlanning = state.planning || {
     weekKey: currentIstanbulWeekKey(),
     generatedAt: new Date(0).toISOString(),
