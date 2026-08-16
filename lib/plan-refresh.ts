@@ -6,7 +6,7 @@ import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
-const PLANNER_VERSION = 5;
+const PLANNER_VERSION = 6;
 
 type PlanningMemory = NonNullable<ChannelState["planning"]> & {
   coveredSubjects?: string[];
@@ -44,9 +44,11 @@ function planningMemory(state: ChannelState) {
 }
 
 /**
- * Sürüm 5'ten itibaren 30 günlük içerik takvimi tamamen manueldir.
- * Kanal verisi, trend, günlük performans veya saat 21:00 yenilemesi konu başlıklarını değiştiremez.
- * Plan yalnızca ilk kez kurulurken veya manuel plan motoru sürümü değiştirildiğinde yüklenir.
+ * 30 günlük takvim manuel konu havuzundan kurulur ve sonrasında sabit kalır.
+ * Sürüm 6 ilk kurulumda kanaldaki yayınlanmış başlıkları güvenlik filtresinden geçirir;
+ * tekrar görülen manuel konu aynı kategorideki manuel yedeğiyle değiştirilir.
+ * Bu tek seferlik doğrulamadan sonra canlı metrikler, trendler ve günlük performans
+ * planı değiştiremez.
  */
 export function shouldRefreshFuturePlan(state: ChannelState) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
