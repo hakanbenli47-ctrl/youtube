@@ -7,6 +7,7 @@ import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
 const PLANNER_VERSION = 4;
+const MINIMUM_FIXED_HORIZON_DAYS = 3;
 
 type PlanningMemory = NonNullable<ChannelState["planning"]> & {
   coveredSubjects?: string[];
@@ -54,8 +55,8 @@ function archiveCoveredSubjects(state: ChannelState, now = new Date()) {
     .map((video) => video.title)
     .filter(Boolean);
 
-  // Saat 21:00 sonrası günün konuları tamamlanmış kabul edilir. Yeni sabit plan motorunda
-  // item.title doğrudan canonical konu başlığıdır; bu yüzden sonraki günlerde yeniden seçilemez.
+  // Tamamlanmış plan başlıkları da kalıcıdır. Yeni sabit plan motorunda item.title
+  // doğrudan canonical konu başlığı olduğundan aynı olay bir daha seçilemez.
   const completedPlanSubjects = state.plan
     .filter((item) => item.date <= today)
     .map((item) => item.title)
@@ -81,21 +82,28 @@ function archiveCoveredSubjects(state: ChannelState, now = new Date()) {
   } as ChannelState;
 }
 
+function fixedHorizonNeedsExtension(state: ChannelState, now = new Date()) {
+  const today = istanbulParts(now).date;
+  const latestDate = state.plan
+    .map((item) => item.date)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  if (!latestDate) return true;
+  const limit = new Date(`${today}T12:00:00+03:00`);
+  limit.setDate(limit.getDate() + MINIMUM_FIXED_HORIZON_DAYS);
+  return latestDate <= limit.toISOString().slice(0, 10);
+}
+
 /**
- * Canlı metrikler iki dakikada bir yenilenebilir; içerik listesi iki dakikada bir
- * değişmez. Konular gün boyunca sabit kalır. Yeni plan motoru sürümü geldiğinde ise
- * mevcut plan bir kez zorunlu yenilenir; böylece eski tekrar hataları ekranda kalmaz.
+ * Konu başlıkları artık günlük metrik değişiminde yeniden yazılmaz. Bir kez üretilen
+ * 30 günlük başlık listesi sabit kalır. Plan sadece motor sürümü değiştiğinde, hiç plan
+ * yoksa veya mevcut sabit takvimin son üç gününe gelindiğinde yenilenir.
  */
 export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
   if ((planningMemory(state)?.plannerVersion || 0) !== PLANNER_VERSION) return true;
-
-  const current = istanbulParts(now);
-  if (current.hour < DAILY_PLAN_REFRESH_HOUR_VALUE) return false;
-  const generatedAt = new Date(state.planning.generatedAt);
-  if (Number.isNaN(generatedAt.getTime())) return true;
-  const generated = istanbulParts(generatedAt);
-  return generated.date !== current.date;
+  return fixedHorizonNeedsExtension(state, now);
 }
 
 export function mergeGeneratedPlanPreservingToday(
