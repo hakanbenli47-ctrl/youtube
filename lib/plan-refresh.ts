@@ -6,8 +6,7 @@ import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
-const PLANNER_VERSION = 4;
-const MINIMUM_FIXED_HORIZON_DAYS = 3;
+const PLANNER_VERSION = 5;
 
 type PlanningMemory = NonNullable<ChannelState["planning"]> & {
   coveredSubjects?: string[];
@@ -44,66 +43,14 @@ function planningMemory(state: ChannelState) {
   return state.planning as PlanningMemory | undefined;
 }
 
-function archiveCoveredSubjects(state: ChannelState, now = new Date()) {
-  const today = istanbulParts(now).date;
-  const previous = planningMemory(state)?.coveredSubjects || [];
-
-  // Kanaldaki bütün yayın başlıkları kalıcı konu engel listesine alınır.
-  // Böylece mevcut 96+ konu, başlık biçimi değişse veya eski plan hafızası eksik olsa bile
-  // tekrar aday havuzuna dönmez.
-  const publishedSubjects = state.videos
-    .map((video) => video.title)
-    .filter(Boolean);
-
-  // Tamamlanmış plan başlıkları da kalıcıdır. Yeni sabit plan motorunda item.title
-  // doğrudan canonical konu başlığı olduğundan aynı olay bir daha seçilemez.
-  const completedPlanSubjects = state.plan
-    .filter((item) => item.date <= today)
-    .map((item) => item.title)
-    .filter(Boolean);
-
-  const coveredSubjects = [...new Set([
-    ...previous,
-    ...publishedSubjects,
-    ...completedPlanSubjects,
-  ])].slice(-4000);
-  const basePlanning = state.planning || {
-    weekKey: currentIstanbulWeekKey(),
-    generatedAt: new Date(0).toISOString(),
-  };
-
-  return {
-    ...state,
-    planning: {
-      ...basePlanning,
-      coveredSubjects,
-      plannerVersion: PLANNER_VERSION,
-    },
-  } as ChannelState;
-}
-
-function fixedHorizonNeedsExtension(state: ChannelState, now = new Date()) {
-  const today = istanbulParts(now).date;
-  const latestDate = state.plan
-    .map((item) => item.date)
-    .filter(Boolean)
-    .sort()
-    .at(-1);
-  if (!latestDate) return true;
-  const limit = new Date(`${today}T12:00:00+03:00`);
-  limit.setDate(limit.getDate() + MINIMUM_FIXED_HORIZON_DAYS);
-  return latestDate <= limit.toISOString().slice(0, 10);
-}
-
 /**
- * Konu başlıkları artık günlük metrik değişiminde yeniden yazılmaz. Bir kez üretilen
- * 30 günlük başlık listesi sabit kalır. Plan sadece motor sürümü değiştiğinde, hiç plan
- * yoksa veya mevcut sabit takvimin son üç gününe gelindiğinde yenilenir.
+ * Sürüm 5'ten itibaren 30 günlük içerik takvimi tamamen manueldir.
+ * Kanal verisi, trend, günlük performans veya saat 21:00 yenilemesi konu başlıklarını değiştiremez.
+ * Plan yalnızca ilk kez kurulurken veya manuel plan motoru sürümü değiştirildiğinde yüklenir.
  */
-export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
+export function shouldRefreshFuturePlan(state: ChannelState) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
-  if ((planningMemory(state)?.plannerVersion || 0) !== PLANNER_VERSION) return true;
-  return fixedHorizonNeedsExtension(state, now);
+  return (planningMemory(state)?.plannerVersion || 0) !== PLANNER_VERSION;
 }
 
 export function mergeGeneratedPlanPreservingToday(
@@ -113,16 +60,12 @@ export function mergeGeneratedPlanPreservingToday(
   now = new Date(),
 ) {
   const today = istanbulParts(now).date;
-  const lockedToday = state.plan.filter((item) => item.date === today);
-  const todayPlan = lockedToday.length
-    ? lockedToday
-    : generated.filter((item) => item.date === today);
-  const futurePlan = generated.filter((item) => item.date > today);
+  const currentAndFuture = generated.filter((item) => item.date >= today);
   const memory = planningMemory(state);
 
   return {
     ...state,
-    plan: sortPlan([...todayPlan, ...futurePlan]),
+    plan: sortPlan(currentAndFuture),
     planning: {
       weekKey: currentIstanbulWeekKey(),
       generatedAt: new Date().toISOString(),
@@ -138,9 +81,8 @@ export function rebuildFuturePlan(
   weeklySchedule: WeeklyScheduleDay[],
   now = new Date(),
 ) {
-  const stateWithMemory = archiveCoveredSubjects(state, now);
-  const generated = generateChannelDrivenPlan(stateWithMemory, weeklySchedule);
-  return mergeGeneratedPlanPreservingToday(stateWithMemory, generated, weeklySchedule, now);
+  const generated = generateChannelDrivenPlan(state, weeklySchedule);
+  return mergeGeneratedPlanPreservingToday(state, generated, weeklySchedule, now);
 }
 
 export function maybeRefreshFuturePlan(
@@ -148,7 +90,7 @@ export function maybeRefreshFuturePlan(
   weeklySchedule: WeeklyScheduleDay[],
   now = new Date(),
 ) {
-  if (!shouldRefreshFuturePlan(state, now)) return state;
+  if (!shouldRefreshFuturePlan(state)) return state;
   return rebuildFuturePlan(state, weeklySchedule, now);
 }
 
