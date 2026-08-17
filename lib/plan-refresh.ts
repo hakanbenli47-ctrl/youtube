@@ -6,7 +6,7 @@ import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
-const PLANNER_VERSION = 6;
+const PLANNER_VERSION = 7;
 
 type PlanningMemory = NonNullable<ChannelState["planning"]> & {
   coveredSubjects?: string[];
@@ -44,11 +44,9 @@ function planningMemory(state: ChannelState) {
 }
 
 /**
- * 30 günlük takvim manuel konu havuzundan kurulur ve sonrasında sabit kalır.
- * Sürüm 6 ilk kurulumda kanaldaki yayınlanmış başlıkları güvenlik filtresinden geçirir;
- * tekrar görülen manuel konu aynı kategorideki manuel yedeğiyle değiştirilir.
- * Bu tek seferlik doğrulamadan sonra canlı metrikler, trendler ve günlük performans
- * planı değiştiremez.
+ * Sürüm 7: 18 Ağustos 2026'dan başlayan 30 günlük takvim tamamen manuel ve sabittir.
+ * Kanal verisi, trend, benzerlik hesabı veya günlük performans konu başlıklarını değiştirmez.
+ * Sürüm değişikliği sadece bu yeni manuel listeyi bir kez yüklemek için kullanılır.
  */
 export function shouldRefreshFuturePlan(state: ChannelState) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
@@ -62,12 +60,13 @@ export function mergeGeneratedPlanPreservingToday(
   now = new Date(),
 ) {
   const today = istanbulParts(now).date;
-  const currentAndFuture = generated.filter((item) => item.date >= today);
+  const lockedToday = state.plan.filter((item) => item.date === today);
+  const future = generated.filter((item) => item.date > today);
   const memory = planningMemory(state);
 
   return {
     ...state,
-    plan: sortPlan(currentAndFuture),
+    plan: sortPlan([...lockedToday, ...future]),
     planning: {
       weekKey: currentIstanbulWeekKey(),
       generatedAt: new Date().toISOString(),
