@@ -4,16 +4,34 @@ on:
     paths:
       - '.github/workflows/topic-export.yml'
 
+permissions:
+  contents: write
+
 jobs:
   export:
     runs-on: ubuntu-latest
     steps:
-      - name: Export exact public channel titles
+      - uses: actions/checkout@v4
+      - name: Save exact public channel titles
         shell: bash
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --disable-pip-version-check yt-dlp
-          echo '=== SHORTS ==='
-          yt-dlp --ignore-errors --flat-playlist --print 'VIDEO\t%(id)s\t%(title)s' 'https://www.youtube.com/@tarihinizi-osmanli/shorts'
-          echo '=== VIDEOS ==='
-          yt-dlp --ignore-errors --flat-playlist --print 'VIDEO\t%(id)s\t%(title)s' 'https://www.youtube.com/@tarihinizi-osmanli/videos'
+          mkdir -p data
+          {
+            echo '# Tarihin İzi Osmanlı — 17 Ağustos 2026 mevcut YouTube içerikleri'
+            echo '# Kaynak: https://www.youtube.com/@tarihinizi-osmanli'
+            echo
+            echo '## SHORTS'
+            yt-dlp --ignore-errors --flat-playlist --print '%(title)s' 'https://www.youtube.com/@tarihinizi-osmanli/shorts'
+            echo
+            echo '## UZUN VIDEOLAR'
+            yt-dlp --ignore-errors --flat-playlist --print '%(title)s' 'https://www.youtube.com/@tarihinizi-osmanli/videos'
+          } > data/published-youtube-topics-2026-08-17.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/published-youtube-topics-2026-08-17.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'Save exact published YouTube topic snapshot'
+            git push
+          fi
