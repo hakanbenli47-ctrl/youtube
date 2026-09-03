@@ -195,7 +195,16 @@ function objectiveValue(video: VideoMetric, objective: Objective) {
   if (objective === "Beğeni") {
     return (video.likes / Math.max(video.views, 1)) * 1000 * quality;
   }
-  const speed = video.recentVelocity || (video.engagedViews || video.views) / Math.max(1, Math.min(21, videoAgeDays(video)));
+  const age = videoAgeDays(video);
+  const speed = (video.viewsLast7Days || 0) > 0
+    ? (video.viewsLast7Days || 0) / Math.max(1, Math.min(7, age))
+    : (video.viewsLast28Days || 0) > 0
+      ? (video.viewsLast28Days || 0) / Math.max(1, Math.min(28, age))
+      : age <= 8 && (video.recentVelocity || 0) > 0
+        ? video.recentVelocity || 0
+        : age <= 28
+          ? video.views / Math.max(1, age)
+          : 0;
   return Math.log10(speed + 10) * 25 * quality;
 }
 
