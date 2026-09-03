@@ -486,6 +486,41 @@ export function generateChannelDrivenPlan(
         strategyMode: candidate.evidenceSamples >= 5 ? "Kazananı büyüt" : candidate.evidenceSamples >= 2 ? "Denge" : "Kontrollü test",
       });
     }
+
+    if (schedule.longVideoTime) {
+      const longCandidate = selectCandidate(
+        candidates,
+        "İzlenme",
+        used,
+        usedRulersToday,
+        usedFamiliesToday,
+        dayIndex * 29 + 7,
+      );
+      if (longCandidate) {
+        used.push(longCandidate);
+        const longTitle = `${longCandidate.subject}: Osmanlı Tarihinde Asıl Kırılma Neydi?`;
+        plan.push({
+          id: `${dateKey}-long`,
+          date: dateKey,
+          dayLabel: format(date, "EEEE", { locale: tr }),
+          format: "Uzun Video",
+          title: longTitle,
+          hook: `${longCandidate.subject} anlatılırken çoğu kişinin atladığı asıl kırılma noktası neydi?`,
+          duration: "8–12 dk",
+          publishTime: schedule.longVideoTime,
+          pillar: longCandidate.topic,
+          objective: "İzlenme Süresi",
+          priority: "Yüksek",
+          reason: `Uzun video konusu da daha önce yayınlanmamış olay havuzundan seçildi. ${longCandidate.patternEvidenceTitle ? `Kanalda “${longCandidate.patternEvidenceTitle}” gibi çalışan merak yapısı referans alındı.` : ""}`,
+          voiceover: `${longCandidate.subject} konusunu güçlü bir çelişkiyle aç. Olayın öncesini, kritik kararları, karşı tarafı, sonucu ve Osmanlı üzerindeki uzun vadeli etkisini kronolojik ama hızlı bir anlatımla işle.`,
+          description: `${longTitle}\n\nBu bölümde olayın nedenlerini, kırılma anını ve Osmanlı üzerindeki uzun vadeli sonucunu kaynaklandırılabilir bir anlatımla inceliyoruz.\n\n#OsmanlıTarihi #Tarih`,
+          hashtags: ["#OsmanlıTarihi", "#Tarih"],
+          cta: "",
+          estimatedSeconds: 600,
+          strategyMode: longCandidate.evidenceSamples >= 5 ? "Kazananı büyüt" : "Kontrollü test",
+        });
+      }
+    }
   }
 
   return plan.sort((left, right) => left.date.localeCompare(right.date) || left.publishTime.localeCompare(right.publishTime));
