@@ -249,6 +249,7 @@ export async function syncYouTube() {
         ? (Date.now() - publishedTime) / DAY_MS
         : 1);
       const viewsLast7Days = numeric(seven.views);
+      const viewsLast28Days = numeric(twentyEight.views);
       return {
         id,
         title: meta?.title || previous?.title || "Başlıksız video",
@@ -262,10 +263,16 @@ export async function syncYouTube() {
         engagedViews,
         viewsLast7Days,
         engagedViewsLast7Days: numeric(seven.engagedViews),
-        viewsLast28Days: numeric(twentyEight.views),
+        viewsLast28Days,
         engagedViewsLast28Days: numeric(twentyEight.engagedViews),
         engagedViewRate: analyticsViews > 0 ? Math.min(100, engagedViews / analyticsViews * 100) : 0,
-        recentVelocity: viewsLast7Days > 0 ? viewsLast7Days / Math.min(7, age) : views / Math.max(1, Math.min(28, age)),
+        recentVelocity: viewsLast7Days > 0
+          ? viewsLast7Days / Math.max(1, Math.min(7, age))
+          : viewsLast28Days > 0
+            ? viewsLast28Days / Math.max(1, Math.min(28, age))
+            : age <= 28
+              ? views / Math.max(1, age)
+              : 0,
         watchHours: numeric(all.estimatedMinutesWatched) / 60,
         subscribersGained: numeric(all.subscribersGained),
         subscribersLost: numeric(all.subscribersLost),
