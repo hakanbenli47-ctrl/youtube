@@ -1,12 +1,12 @@
 import "server-only";
 
-import { generateChannelDrivenPlan } from "./fixed-topic-plan";
+import { generateChannelDrivenPlan } from "./channel-driven-plan";
 import { currentIstanbulWeekKey } from "./scheduling";
 import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
-const PLANNER_VERSION = 7;
+const PLANNER_VERSION = 8;
 
 type PlanningMemory = NonNullable<ChannelState["planning"]> & {
   coveredSubjects?: string[];
@@ -44,13 +44,15 @@ function planningMemory(state: ChannelState) {
 }
 
 /**
- * Sürüm 7: 18 Ağustos 2026'dan başlayan 30 günlük takvim tamamen manuel ve sabittir.
- * Kanal verisi, trend, benzerlik hesabı veya günlük performans konu başlıklarını değiştirmez.
- * Sürüm değişikliği sadece bu yeni manuel listeyi bir kez yüklemek için kullanılır.
+ * Sürüm 8: Gelecek planı her İstanbul gününde bir kez yeniden hesaplanır.
+ * Konular kanalın kazanan kalıplarından seçilir ancak aynı tarihî olay tekrar kullanılamaz.
  */
-export function shouldRefreshFuturePlan(state: ChannelState) {
+export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
-  return (planningMemory(state)?.plannerVersion || 0) !== PLANNER_VERSION;
+  if ((planningMemory(state)?.plannerVersion || 0) !== PLANNER_VERSION) return true;
+  const generatedDay = istanbulParts(new Date(state.planning.generatedAt)).date;
+  const today = istanbulParts(now).date;
+  return generatedDay !== today;
 }
 
 export function mergeGeneratedPlanPreservingToday(
@@ -91,7 +93,7 @@ export function maybeRefreshFuturePlan(
   weeklySchedule: WeeklyScheduleDay[],
   now = new Date(),
 ) {
-  if (!shouldRefreshFuturePlan(state)) return state;
+  if (!shouldRefreshFuturePlan(state, now)) return state;
   return rebuildFuturePlan(state, weeklySchedule, now);
 }
 
