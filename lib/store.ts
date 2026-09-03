@@ -9,7 +9,7 @@ import {
   randomUUID,
 } from "node:crypto";
 import path from "node:path";
-import type { ChannelState } from "./schema";
+import type { AudienceActivityDay, ChannelState } from "./schema";
 
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const DATA_DIR = IS_VERCEL
@@ -22,6 +22,22 @@ const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_R
 let writeQueue = Promise.resolve();
 let mutationQueue = Promise.resolve();
 const localLocks = new Map<string, Promise<unknown>>();
+
+const AUDIENCE_ACTIVITY_UPDATED_AT = "2026-09-04T01:23:00+03:00";
+
+function activityRows(values: Array<[number, number]>) {
+  return values.map(([hour, score]) => ({ hour, score }));
+}
+
+const INITIAL_AUDIENCE_ACTIVITY: AudienceActivityDay[] = [
+  { day: 1, dayLabel: "Pazartesi", updatedAt: AUDIENCE_ACTIVITY_UPDATED_AT, hours: activityRows([[9,40],[10,40],[11,40],[12,70],[13,70],[14,70],[15,70],[16,70],[17,70],[18,70],[19,100],[20,100],[21,100],[22,100],[23,70]]) },
+  { day: 2, dayLabel: "Salı", updatedAt: AUDIENCE_ACTIVITY_UPDATED_AT, hours: activityRows([[9,40],[10,40],[11,70],[12,70],[13,70],[14,70],[15,70],[16,70],[17,70],[18,70],[19,100],[20,100],[21,100],[22,100],[23,70]]) },
+  { day: 3, dayLabel: "Çarşamba", updatedAt: AUDIENCE_ACTIVITY_UPDATED_AT, hours: activityRows([[9,40],[10,40],[11,70],[12,70],[13,70],[14,70],[15,70],[16,70],[17,70],[18,70],[19,100],[20,100],[21,100],[22,100],[23,70]]) },
+  { day: 4, dayLabel: "Perşembe", updatedAt: AUDIENCE_ACTIVITY_UPDATED_AT, hours: activityRows([[9,40],[10,40],[11,70],[12,70],[13,70],[14,70],[15,70],[16,70],[17,70],[18,100],[19,100],[20,100],[21,100],[22,100],[23,70]]) },
+  { day: 5, dayLabel: "Cuma", updatedAt: AUDIENCE_ACTIVITY_UPDATED_AT, hours: activityRows([[9,40],[10,40],[11,70],[12,70],[13,40],[14,70],[15,70],[16,70],[17,70],[18,100],[19,100],[20,100],[21,100],[22,100],[23,70]]) },
+  { day: 6, dayLabel: "Cumartesi", updatedAt: AUDIENCE_ACTIVITY_UPDATED_AT, hours: activityRows([[9,40],[10,70],[11,70],[12,70],[13,70],[14,70],[15,70],[16,70],[17,70],[18,100],[19,100],[20,100],[21,100],[22,100],[23,70]]) },
+  { day: 0, dayLabel: "Pazar", updatedAt: AUDIENCE_ACTIVITY_UPDATED_AT, hours: activityRows([[9,40],[10,70],[11,70],[12,70],[13,70],[14,100],[15,100],[16,100],[17,100],[18,100],[19,100],[20,100],[21,100],[22,100],[23,70]]) },
+];
 
 type RedisResponse<T> = {
   result?: T;
@@ -121,7 +137,7 @@ export function createEmptyState(): ChannelState {
     videos: [],
     daily: [],
     shortsDaily: [],
-    audienceActivity: [],
+    audienceActivity: INITIAL_AUDIENCE_ACTIVITY,
     snapshots: [],
     trends: [],
     plan: [],
@@ -153,7 +169,7 @@ function normalizeState(stored: ChannelState): ChannelState {
     videos: stored.videos || [],
     daily: stored.daily || [],
     shortsDaily: stored.shortsDaily || [],
-    audienceActivity: stored.audienceActivity || [],
+    audienceActivity: stored.audienceActivity?.length ? stored.audienceActivity : INITIAL_AUDIENCE_ACTIVITY,
     snapshots: stored.snapshots || [],
     trends: stored.trends || [],
     plan: stored.plan || [],
