@@ -509,7 +509,7 @@ export default function Home() {
               </div>
               <details className="calculation-details">
                 <summary>Bu hedef nasıl hesaplandı?</summary>
-                <p>Shorts hedefi kayan son 90 gündür; sabit bir 90 günlük geri sayım değildir. Panel API'deki etkileşimli Shorts verisini YPP için yakın tahmin olarak kullanır; kesin uygunluk sayacı YouTube Studio Kazanç bölümündedir. Abone hedefi ayrıca takip edilir.</p>
+                <p>Shorts hedefi kayan son 90 gündür; sabit bir 90 günlük geri sayım değildir. Panel API’deki etkileşimli Shorts verisini YPP için yakın tahmin olarak kullanır; kesin uygunluk sayacı YouTube Studio Kazanç bölümündedir. Abone hedefi ayrıca takip edilir.</p>
               </details>
             </section>
 
