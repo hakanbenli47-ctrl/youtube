@@ -1,20 +1,30 @@
+import { persistentAuthConfigured, recoverServerAuth } from "@/lib/auth-vault";
 import { getState, persistentStorageReady } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const state = await getState();
-  const healthy = Boolean(
-    persistentStorageReady() &&
-    process.env.YOUTUBE_CLIENT_ID &&
-    process.env.YOUTUBE_CLIENT_SECRET,
+  const stored = await getState();
+  const recovery = await recoverServerAuth(stored);
+  const state = recovery.state;
+  const credentialsReady = Boolean(
+    process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET,
   );
+  const durableAuth = persistentAuthConfigured();
+  const healthy = Boolean(
+    credentialsReady &&
+    state.auth.connected &&
+    (persistentStorageReady() || durableAuth),
+  );
+
   return Response.json({
     healthy,
     persistentStorage: persistentStorageReady(),
-    youtubeCredentials: Boolean(
-      process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
+    persistentAuthVault: durableAuth,
+    authSource: recovery.source,
+    youtubeCredentials: credentialsReady,
     youtubeConnected: state.auth.connected,
+    refreshTokenPresent: Boolean(state.auth.tokens?.refresh_token),
     lastSuccessfulSync: state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync,
     dataThroughDate: state.sync.dataThroughDate || null,
     analyticsLagDays: state.sync.analyticsLagDays || 0,
