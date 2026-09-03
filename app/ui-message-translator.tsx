@@ -14,10 +14,31 @@ function translateNotices() {
   });
 }
 
+function repairScheduleHours() {
+  document.querySelectorAll<HTMLElement>(".schedule-day > div").forEach((row) => {
+    const seen = new Set<string>();
+    let kept = 0;
+    for (const item of Array.from(row.querySelectorAll<HTMLElement>(":scope > span"))) {
+      const time = item.querySelector("b")?.textContent?.trim() || "";
+      if (!time || seen.has(time) || kept >= 4) {
+        item.remove();
+        continue;
+      }
+      seen.add(time);
+      kept += 1;
+    }
+  });
+}
+
+function repairUi() {
+  translateNotices();
+  repairScheduleHours();
+}
+
 export default function UiMessageTranslator() {
   useEffect(() => {
-    translateNotices();
-    const observer = new MutationObserver(() => translateNotices());
+    repairUi();
+    const observer = new MutationObserver(() => repairUi());
     observer.observe(document.body, {
       childList: true,
       subtree: true,
