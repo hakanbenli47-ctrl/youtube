@@ -50,9 +50,10 @@ function planningMemory(state: ChannelState) {
 export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
   if ((planningMemory(state)?.plannerVersion || 0) !== PLANNER_VERSION) return true;
-  const generatedDay = istanbulParts(new Date(state.planning.generatedAt)).date;
-  const today = istanbulParts(now).date;
-  return generatedDay !== today;
+  const generated = istanbulParts(new Date(state.planning.generatedAt));
+  const current = istanbulParts(now);
+  if (current.hour < DAILY_PLAN_REFRESH_HOUR_VALUE) return false;
+  return generated.date !== current.date || generated.hour < DAILY_PLAN_REFRESH_HOUR_VALUE;
 }
 
 export function mergeGeneratedPlanPreservingToday(
