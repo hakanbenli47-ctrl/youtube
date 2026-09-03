@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { ChannelState, DashboardData, VideoMetric } from "./schema";
+import type { ChannelState, DashboardData, PostingSlot, VideoMetric } from "./schema";
 import { publicState } from "./store";
 import { buildAdaptiveWeeklySchedule, currentIstanbulWeekKey, nextWeeklyReviewAt } from "./scheduling";
 import {
@@ -94,8 +94,18 @@ export function buildDashboard(state: ChannelState): DashboardData {
 
   const topicInsights = buildTopicInsights(state);
   const repetitionAlerts = buildRepetitionAlerts(state, topicInsights);
-  const postingSlots = buildPostingSlots(state);
   const weeklySchedule = buildAdaptiveWeeklySchedule(state);
+  const postingSlots: PostingSlot[] = weeklySchedule.flatMap((day) =>
+    (day.shortSlots || []).map((slot, index) => ({
+      id: `adaptive-${day.day}-${index}`,
+      dayLabel: day.dayLabel,
+      time: slot.time,
+      format: "Shorts" as const,
+      sampleSize: slot.sampleSize,
+      score: slot.score,
+      confidence: day.confidence,
+      reason: slot.reason,
+    })));
   const recommendations = buildRecommendations(state, topicInsights, repetitionAlerts, postingSlots);
   const shorts = state.videos.filter((video) => video.contentType === "SHORT" && video.views > 0);
   const base = baselines(shorts.length ? shorts : state.videos.filter((video) => video.views > 0));
