@@ -177,8 +177,11 @@ function historyPoints(rows: MetricSnapshot[], videoId: string) {
 }
 
 function qualitySignals(video: VideoMetric) {
-  const retention = video.avgViewPercentage > 0
-    ? clamp((video.avgViewPercentage - 45) / 50, 0, 1)
+  const retentionValue = video.avgViewPercentage > 0 && (video.retention10Percent || 0) > 0
+    ? video.avgViewPercentage * 0.65 + (video.retention10Percent || 0) * 0.35
+    : video.avgViewPercentage || video.retention10Percent || 0;
+  const retention = retentionValue > 0
+    ? clamp((retentionValue - 45) / 50, 0, 1)
     : 0.45;
   const engaged = (video.engagedViewRate || 0) > 0
     ? clamp(((video.engagedViewRate || 0) - 40) / 40, 0, 1)
