@@ -36,10 +36,10 @@ function engagedRate(video: VideoMetric) {
   return analyticsViews > 0 ? clamp(((video.engagedViews || 0) / analyticsViews) * 100, 0, 100) : 0;
 }
 function velocity(video: VideoMetric) {
-  if ((video.recentVelocity || 0) > 0) return video.recentVelocity || 0;
   const age = ageDays(video);
   if ((video.viewsLast7Days || 0) > 0) return (video.viewsLast7Days || 0) / Math.max(1, Math.min(7, age));
   if ((video.viewsLast28Days || 0) > 0) return (video.viewsLast28Days || 0) / Math.max(1, Math.min(28, age));
+  if (age <= 8 && (video.recentVelocity || 0) > 0) return video.recentVelocity || 0;
   if (age <= 28) return video.views / Math.max(1, age);
   return 0;
 }
@@ -63,7 +63,8 @@ function indexed(value: number, baseline: number, sensitivity: number) {
 }
 function quality(video: VideoMetric, base: ReturnType<typeof baselines>) {
   const reach = indexed(velocity(video), base.velocity, 18);
-  const retention = video.avgViewPercentage > 0 ? indexed(video.avgViewPercentage, base.retention, 15) : 45;
+  const retentionValue = retentionSignal(video);
+  const retention = retentionValue > 0 ? indexed(retentionValue, base.retention, 15) : 45;
   const engaged = engagedRate(video) > 0 ? indexed(engagedRate(video), base.engaged, 14) : 45;
   const conversion = indexed(subscriberRate(video), base.conversion, 13);
   const interaction = indexed(interactionRate(video), base.interaction, 11);
