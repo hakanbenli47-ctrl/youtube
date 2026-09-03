@@ -350,7 +350,7 @@ export async function syncYouTube() {
     const retentionTargets = videos
       .filter((video) => video.contentType === "SHORT" && video.views >= 100 && ageDaysForRetention(video) <= 45)
       .sort((left, right) => right.publishedAt.localeCompare(left.publishedAt))
-      .slice(0, 8);
+      .slice(0, 4);
     for (const video of retentionTargets) {
       const updatedAt = video.retentionUpdatedAt ? new Date(video.retentionUpdatedAt).getTime() : 0;
       if (updatedAt && Date.now() - updatedAt < 18 * 60 * 60_000) continue;
