@@ -68,7 +68,7 @@ export function buildDashboard(state: ChannelState): DashboardData {
   const deadline = new Date(`${state.goals.deadline}T23:59:59`).getTime();
   const daysRemaining = Math.max(1, Math.ceil((deadline - Date.now()) / DAY_MS));
   const subscriberGrowthRequired = Math.max(0, state.goals.subscriberTarget - state.channel.subscriberCount);
-  const conversionBase = state.totals.analyticsViews || state.totals.views;
+  const conversionBase = sum(daily.map((day) => day.views)) || state.totals.analyticsViews || state.totals.views;
   const conversion = conversionBase > 0 && state.totals.netSubscribers > 0
     ? state.totals.netSubscribers / conversionBase
     : 0.003;
