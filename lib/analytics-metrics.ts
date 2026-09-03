@@ -44,7 +44,6 @@ export function ageDays(video: VideoMetric) {
 }
 
 export function velocity(video: VideoMetric) {
-  if ((video.recentVelocity || 0) > 0) return video.recentVelocity || 0;
   const age = ageDays(video);
   if ((video.viewsLast7Days || 0) > 0) {
     return (video.viewsLast7Days || 0) / Math.max(1, Math.min(7, age));
@@ -52,6 +51,7 @@ export function velocity(video: VideoMetric) {
   if ((video.viewsLast28Days || 0) > 0) {
     return (video.viewsLast28Days || 0) / Math.max(1, Math.min(28, age));
   }
+  if (age <= 8 && (video.recentVelocity || 0) > 0) return video.recentVelocity || 0;
   if (age <= 28) return video.views / Math.max(1, age);
   return 0;
 }
