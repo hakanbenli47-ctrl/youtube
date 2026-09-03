@@ -204,29 +204,31 @@ export function buildWinningCombinations(state: ChannelState): CombinationInsigh
 export function buildShortsGrowthGoal(state: ChannelState) {
   const targetViews = 10_000_000;
   const windowDays = 90;
-  const cutoff = Date.now() - windowDays * DAY_MS;
+  const cutoff = Date.now() - (windowDays - 1) * DAY_MS;
   const reported = sum((state.shortsDaily || [])
-    .filter((day) => new Date(`${day.date}T23:59:59`).getTime() >= cutoff)
+    .filter((day) => new Date(`${day.date}T12:00:00+03:00`).getTime() >= cutoff)
     .map((day) => day.engagedViews || 0));
   const fallback = sum(state.videos
     .filter((video) => video.contentType === "SHORT" && new Date(video.publishedAt).getTime() >= cutoff)
     .map((video) => video.engagedViews || 0));
   const currentViews = reported || fallback;
-  const last7 = (state.shortsDaily || []).slice(-7);
+  const last7 = (state.shortsDaily || []).filter((day) =>
+    new Date(`${day.date}T12:00:00+03:00`).getTime() >= Date.now() - 6 * DAY_MS);
   const currentViewsPerDay = last7.length
-    ? sum(last7.map((day) => day.engagedViews || 0)) / 7
+    ? sum(last7.map((day) => day.engagedViews || 0)) / last7.length
     : sum(state.videos
       .filter((video) => video.contentType === "SHORT")
       .map((video) => video.engagedViewsLast7Days || 0)) / 7;
   const remainingViews = Math.max(0, targetViews - currentViews);
   const subscribersRemaining = Math.max(0, 1000 - state.channel.subscriberCount);
-  const paceRatio = currentViewsPerDay / Math.max(remainingViews / windowDays, 1);
+  const requiredViewsPerDay = targetViews / windowDays;
+  const paceRatio = currentViewsPerDay / Math.max(requiredViewsPerDay, 1);
   return {
     targetViews,
     windowDays,
     currentViews,
     remainingViews,
-    requiredViewsPerDay: remainingViews / windowDays,
+    requiredViewsPerDay,
     currentViewsPerDay,
     projectedWindowViews: Math.round(currentViewsPerDay * windowDays),
     progressPercent: Math.min(100, currentViews / targetViews * 100),
