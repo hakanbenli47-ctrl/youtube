@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import AutoLiveSync from "./auto-live-sync";
+import UiMessageTranslator from "./ui-message-translator";
 import "./globals.css";
 import "./youtube-theme.css";
 import "./theme-patch-v3.css";
@@ -40,6 +41,7 @@ export default function RootLayout({
       <body>
         {children}
         <AutoLiveSync />
+        <UiMessageTranslator />
         <nav className="global-quick-nav" aria-label="Hızlı erişim">
           <Link href="/">Plan</Link>
           <Link href="/analytics">Canlı analizler</Link>
