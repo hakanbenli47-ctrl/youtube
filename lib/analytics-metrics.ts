@@ -74,6 +74,13 @@ function subscriberRate(video: VideoMetric) {
     Math.max(video.analyticsViews || video.views, 1)) * 1000;
 }
 
+function retentionSignal(video: VideoMetric) {
+  const averageRetention = video.avgViewPercentage || 0;
+  const earlyRetention = video.retention10Percent || 0;
+  if (averageRetention > 0 && earlyRetention > 0) return averageRetention * 0.65 + earlyRetention * 0.35;
+  return averageRetention || earlyRetention;
+}
+
 type Baselines = {
   velocity: number;
   retention: number;
@@ -83,7 +90,7 @@ type Baselines = {
 };
 
 export function baselines(videos: VideoMetric[]): Baselines {
-  const retentions = videos.map((video) => video.avgViewPercentage).filter((value) => value > 0);
+  const retentions = videos.map(retentionSignal).filter((value) => value > 0);
   const engaged = videos.map(engagedRate).filter((value) => value > 0);
   return {
     velocity: Math.max(1, median(videos.map(velocity))),
@@ -102,8 +109,9 @@ function indexed(value: number, baseline: number, sensitivity: number) {
 
 export function quality(video: VideoMetric, base: Baselines) {
   const reach = indexed(velocity(video), base.velocity, 18);
-  const retention = video.avgViewPercentage > 0
-    ? indexed(video.avgViewPercentage, base.retention, 15)
+  const retentionValue = retentionSignal(video);
+  const retention = retentionValue > 0
+    ? indexed(retentionValue, base.retention, 15)
     : 45;
   const engaged = engagedRate(video) > 0
     ? indexed(engagedRate(video), base.engaged, 14)
