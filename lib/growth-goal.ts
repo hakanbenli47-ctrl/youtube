@@ -8,16 +8,17 @@ const WINDOW_DAYS = 90;
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
 function dayTime(value: string) {
-  const timestamp = new Date(`${value}T12:00:00Z`).getTime();
+  const timestamp = new Date(`${value}T12:00:00+03:00`).getTime();
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 export function buildShortsGrowthGoal(state: ChannelState): ShortsGrowthGoal {
   const now = Date.now();
-  const cutoff = now - WINDOW_DAYS * DAY_MS;
+  const cutoff = now - (WINDOW_DAYS - 1) * DAY_MS;
   const shortsDays = (state.shortsDaily || [])
     .filter((day) => dayTime(day.date) >= cutoff)
     .sort((left, right) => left.date.localeCompare(right.date));
+
   const reportedViews = sum(shortsDays.map((day) => day.engagedViews || 0));
   const fallbackViews = sum(state.videos
     .filter((video) =>
@@ -26,28 +27,23 @@ export function buildShortsGrowthGoal(state: ChannelState): ShortsGrowthGoal {
     .map((video) => video.engagedViews || 0));
   const currentViews = reportedViews > 0 ? reportedViews : fallbackViews;
 
-  const earliestShortDate = shortsDays[0]?.date || state.videos
-    .filter((video) => video.contentType === "SHORT" && video.publishedAt)
-    .map((video) => video.publishedAt.slice(0, 10))
-    .sort()[0];
-  const elapsedDays = earliestShortDate
-    ? Math.min(WINDOW_DAYS, Math.max(1, Math.floor((now - dayTime(earliestShortDate)) / DAY_MS) + 1))
-    : 1;
-  const daysRemaining = Math.max(1, WINDOW_DAYS - elapsedDays);
-
-  const sevenDayCutoff = now - 6 * DAY_MS;
-  const recentDays = shortsDays.filter((day) => dayTime(day.date) >= sevenDayCutoff);
+  const recentCutoff = now - 6 * DAY_MS;
+  const recentDays = shortsDays.filter((day) => dayTime(day.date) >= recentCutoff);
   const recentViews = sum(recentDays.map((day) => day.engagedViews || 0));
-  const observedRecentDays = Math.max(1, Math.min(7, elapsedDays));
+  const observedRecentDays = Math.max(1, recentDays.length || Math.min(7, shortsDays.length) || 1);
   const fallbackRecentViews = sum(state.videos
     .filter((video) => video.contentType === "SHORT")
     .map((video) => video.engagedViewsLast7Days || 0));
   const currentViewsPerDay = (recentViews > 0 ? recentViews : fallbackRecentViews) / observedRecentDays;
 
+  // YPP Shorts hedefi sabit başlangıçlı 90 günlük sayaç değil, kayan son 90 gündür.
+  // Bu yüzden hedef hızını "kalan / kalan gün" diye hesaplamak yanlış olur.
+  // Sürdürülebilir hedef hızı, herhangi bir 90 günlük pencerede 10M üretecek günlük tempodur.
+  const requiredViewsPerDay = TARGET_VIEWS / WINDOW_DAYS;
+  const projectedWindowViews = Math.round(currentViewsPerDay * WINDOW_DAYS);
   const remainingViews = Math.max(0, TARGET_VIEWS - currentViews);
   const subscribersRemaining = Math.max(0, 1000 - state.channel.subscriberCount);
-  const requiredViewsPerDay = remainingViews / daysRemaining;
-  const paceRatio = currentViewsPerDay / Math.max(requiredViewsPerDay, 1);
+  const paceRatio = currentViewsPerDay / requiredViewsPerDay;
 
   return {
     targetViews: TARGET_VIEWS,
@@ -56,12 +52,12 @@ export function buildShortsGrowthGoal(state: ChannelState): ShortsGrowthGoal {
     remainingViews,
     requiredViewsPerDay,
     currentViewsPerDay,
-    projectedWindowViews: Math.round(currentViews + currentViewsPerDay * daysRemaining),
+    projectedWindowViews,
     progressPercent: Math.min(100, currentViews / TARGET_VIEWS * 100),
     subscriberTarget: 1000,
     currentSubscribers: state.channel.subscriberCount,
     subscribersRemaining,
-    requiredSubscribersPerDay: subscribersRemaining / daysRemaining,
+    requiredSubscribersPerDay: subscribersRemaining / WINDOW_DAYS,
     status: paceRatio >= 1
       ? "HEDEF HIZINDA"
       : state.videos.filter((video) => video.contentType === "SHORT").length < 45
