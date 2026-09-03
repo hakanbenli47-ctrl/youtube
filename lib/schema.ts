@@ -51,6 +51,16 @@ export type ShortsDailyMetric = DailyMetric & {
   contentType: "SHORTS";
 };
 
+export type AudienceActivityDay = {
+  day: number;
+  dayLabel: string;
+  hours: Array<{
+    hour: number;
+    score: number;
+  }>;
+  updatedAt?: string;
+};
+
 export type VideoSnapshotMetric = {
   views: number;
   engagedViews: number;
@@ -247,6 +257,7 @@ export type ChannelState = {
   videos: VideoMetric[];
   daily: DailyMetric[];
   shortsDaily: ShortsDailyMetric[];
+  audienceActivity?: AudienceActivityDay[];
   snapshots?: MetricSnapshot[];
   trends: TrendVideo[];
   plan: PlanItem[];
@@ -255,6 +266,8 @@ export type ChannelState = {
     weekKey: string;
     generatedAt: string;
     weeklySchedule?: WeeklyScheduleDay[];
+    coveredSubjects?: string[];
+    plannerVersion?: number;
   };
   auth: {
     connected: boolean;
