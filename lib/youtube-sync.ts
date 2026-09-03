@@ -21,6 +21,11 @@ import {
   durationSeconds,
 } from "./youtube-core";
 
+function ageDaysForRetention(video: VideoMetric) {
+  const published = new Date(video.publishedAt).getTime();
+  return Number.isFinite(published) ? Math.max(0, (Date.now() - published) / DAY_MS) : 999;
+}
+
 type PublicMetadata = {
   title: string;
   publishedAt: string;
@@ -92,6 +97,54 @@ async function publicMetadata(
     }
   }
   return metadata;
+}
+
+
+type RetentionSummary = {
+  retention10Percent: number;
+  retention50Percent: number;
+  retention90Percent: number;
+  relativeRetention10Percent: number;
+};
+
+async function retentionSummary(
+  analytics: ReturnType<typeof google.youtubeAnalytics>,
+  videoId: string,
+  endDate: string,
+): Promise<RetentionSummary | null> {
+  try {
+    const { response } = await report(analytics, {
+      ids: "channel==MINE",
+      startDate: "2005-01-01",
+      endDate,
+      dimensions: "elapsedVideoTimeRatio",
+      metrics: "audienceWatchRatio,relativeRetentionPerformance",
+      filters: `video==${videoId}`,
+      sort: "elapsedVideoTimeRatio",
+    });
+    const points = rows(response.data.columnHeaders, response.data.rows)
+      .map((row) => ({
+        ratio: numeric(row.elapsedVideoTimeRatio),
+        watch: numeric(row.audienceWatchRatio) * 100,
+        relative: numeric(row.relativeRetentionPerformance) * 100,
+      }))
+      .filter((row) => row.ratio > 0 && row.watch > 0);
+    if (!points.length) return null;
+    const nearest = (target: number) =>
+      [...points].sort((left, right) => Math.abs(left.ratio - target) - Math.abs(right.ratio - target))[0];
+    const at10 = nearest(0.10);
+    const at50 = nearest(0.50);
+    const at90 = nearest(0.90);
+    return {
+      retention10Percent: Math.min(200, at10.watch),
+      retention50Percent: Math.min(200, at50.watch),
+      retention90Percent: Math.min(200, at90.watch),
+      relativeRetention10Percent: Math.min(100, at10.relative),
+    };
+  } catch {
+    // Retention verisi yeni videolarda gecikebilir. Ana senkronu asla düşürme.
+    return null;
+  }
 }
 
 export async function refreshPublicYouTubeStats(existingState?: ChannelState) {
@@ -280,6 +333,11 @@ export async function syncYouTube() {
         ctr: previous?.ctr ?? null,
         avgViewDurationSeconds: numeric(all.averageViewDuration),
         avgViewPercentage: numeric(all.averageViewPercentage),
+        retention10Percent: previous?.retention10Percent,
+        retention50Percent: previous?.retention50Percent,
+        retention90Percent: previous?.retention90Percent,
+        relativeRetention10Percent: previous?.relativeRetention10Percent,
+        retentionUpdatedAt: previous?.retentionUpdatedAt,
         likes: Math.max(numeric(all.likes), meta?.likes || 0),
         comments: Math.max(numeric(all.comments), meta?.comments || 0),
         shares: numeric(all.shares),
@@ -288,6 +346,18 @@ export async function syncYouTube() {
         dataThroughDate: analyticsEndDate,
       };
     });
+
+    const retentionTargets = videos
+      .filter((video) => video.contentType === "SHORT" && video.views >= 100 && ageDaysForRetention(video) <= 45)
+      .sort((left, right) => right.publishedAt.localeCompare(left.publishedAt))
+      .slice(0, 8);
+    for (const video of retentionTargets) {
+      const updatedAt = video.retentionUpdatedAt ? new Date(video.retentionUpdatedAt).getTime() : 0;
+      if (updatedAt && Date.now() - updatedAt < 18 * 60 * 60_000) continue;
+      const retention = await retentionSummary(analytics, video.id, analyticsEndDate);
+      if (!retention) continue;
+      Object.assign(video, retention, { retentionUpdatedAt: new Date().toISOString() });
+    }
 
     const missing = videos.filter((video) => video.views > 0 && (video.analyticsViews || 0) === 0).length;
     const dataThroughDate = daily.at(-1)?.date || analyticsEndDate;
