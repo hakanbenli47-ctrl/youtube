@@ -103,7 +103,10 @@ function displayDay(date: string) {
 function scoreVideo(video: VideoMetric) {
   const conversion =
     ((video.subscribersGained - video.subscribersLost) / Math.max(video.views, 1)) * 1000;
-  const retention = Math.min(100, video.avgViewPercentage);
+  const retentionValue = video.avgViewPercentage > 0 && (video.retention10Percent || 0) > 0
+    ? video.avgViewPercentage * 0.65 + (video.retention10Percent || 0) * 0.35
+    : video.avgViewPercentage || video.retention10Percent || 0;
+  const retention = Math.min(100, retentionValue);
   const reach = Math.min(100, Math.log10(video.views + 1) * 24);
   return Math.round(
     reach * 0.45 + retention * 0.35 + Math.min(100, conversion * 8) * 0.2,
@@ -608,7 +611,7 @@ export default function Home() {
                         <td><span>{video.topic}</span><strong>{video.title}</strong></td>
                         <td><b className="type-pill">{video.contentType === "SHORT" ? "Shorts" : "Uzun"}</b></td>
                         <td>{whole.format(video.views)}</td>
-                        <td>%{decimal.format(video.avgViewPercentage)}</td>
+                        <td>%{decimal.format(video.avgViewPercentage)}{(video.retention10Percent || 0) > 0 ? <small> · %10 noktası %{decimal.format(video.retention10Percent || 0)}</small> : null}</td>
                         <td>{decimal.format(conversion)}</td>
                         <td><b className={`result-pill ${score >= 70 ? "good" : score < 45 ? "bad" : "test"}`}>{score >= 70 ? "Güçlü" : score < 45 ? "Zayıf" : "Test et"} · {score}</b></td>
                       </tr>
