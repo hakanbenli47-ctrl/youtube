@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import AutoLiveSync from "./auto-live-sync";
 import "./globals.css";
@@ -40,8 +41,8 @@ export default function RootLayout({
         {children}
         <AutoLiveSync />
         <nav className="global-quick-nav" aria-label="Hızlı erişim">
-          <a href="/">Plan</a>
-          <a href="/analytics">Canlı analizler</a>
+          <Link href="/">Plan</Link>
+          <Link href="/analytics">Canlı analizler</Link>
         </nav>
       </body>
     </html>
