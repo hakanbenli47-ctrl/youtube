@@ -2,7 +2,7 @@ import "server-only";
 
 import { addDays, format } from "date-fns";
 import { tr } from "date-fns/locale";
-import { detectHistoryTopic, detectOttomanRuler } from "./history";
+import { detectHistoryTopic, detectHookPattern, detectOttomanRuler } from "./history";
 import type { ChannelState, PlanItem, VideoMetric, WeeklyScheduleDay } from "./schema";
 import { buildViralTopicCandidates } from "./topic-sourcing";
 
@@ -32,6 +32,8 @@ type Candidate = {
   likeScore: number;
   evidenceSamples: number;
   viralBonus: number;
+  winningPattern: string;
+  patternEvidenceTitle?: string;
 };
 
 type PlanningMemory = {
@@ -222,8 +224,59 @@ function evidenceFor(state: ChannelState, subject: string, objective: Objective)
   return { score, samples: rows.filter((row) => row.relevance >= 0.35).length };
 }
 
-function titleFor(subject: string, eventFamily: EventFamily, seed: number) {
-  const templates: Record<EventFamily, string[]> = {
+function winningPatternFor(state: ChannelState, subject: string) {
+  const shorts = state.videos
+    .filter((video) => video.contentType === "SHORT" && video.views > 0)
+    .map((video) => {
+      const relevance = themeRelevance(subject, video);
+      const performance =
+        objectiveValue(video, "İzlenme") +
+        objectiveValue(video, "Abone") * 8 +
+        objectiveValue(video, "Beğeni") * 0.35;
+      return { video, relevance, performance, score: performance * (0.65 + relevance * 0.75) };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  const related = shorts.find((row) => row.relevance >= 0.35);
+  const source = related || shorts[0];
+  return source
+    ? { pattern: detectHookPattern(source.video.title), sourceTitle: source.video.title }
+    : { pattern: "Doğrudan Soru", sourceTitle: undefined };
+}
+
+function titleFor(subject: string, eventFamily: EventFamily, seed: number, pattern: string) {
+  const patternTemplates: Record<string, string[]> = {
+    "Liste / En Güçlü": [
+      `${subject} Hakkında Bilinmesi Gereken 5 Şey`,
+      `${subject} Hakkındaki En Şaşırtıcı 5 Ayrıntı`,
+      `${subject} Osmanlı'yı Değiştiren 5 Nokta`,
+    ],
+    "Neden?": [
+      `${subject} Neden Bu Kadar Önemliydi?`,
+      `${subject} Neden Osmanlı İçin Kırılma Noktası Oldu?`,
+    ],
+    "Nasıl?": [
+      `${subject} Osmanlı'yı Nasıl Etkiledi?`,
+      `${subject} Dengeleri Nasıl Değiştirdi?`,
+    ],
+    "Gizem / Şaşırtıcı": [
+      `${subject} Hakkındaki En Şaşırtıcı Gerçek Neydi?`,
+      `${subject} Hakkında Pek Bilinmeyen Ayrıntı Ne?`,
+    ],
+    "İlk / Başlangıç": [
+      `${subject} Osmanlı'da Neyi Başlattı?`,
+      `${subject} Neden Yeni Bir Dönemin Başlangıcıydı?`,
+    ],
+    "Ölüm / Son Günler": [
+      `${subject} Sonrasında Osmanlı'da Ne Değişti?`,
+      `${subject} Neden Bir Dönemin Sonu Oldu?`,
+    ],
+    "Doğrudan Soru": [
+      `${subject} Gerçekte Ne Oldu?`,
+      `${subject} Osmanlı İçin Neyi Değiştirdi?`,
+    ],
+  };
+  const familyTemplates: Record<EventFamily, string[]> = {
     conquest: [`${subject} Osmanlı İçin Neden Bu Kadar Önemliydi?`, `${subject} Sonrası Ne Değişti?`],
     loss: [`${subject} Osmanlı'yı Nasıl Sarstı?`, `${subject} Sonrası Osmanlı'da Ne Değişti?`],
     campaign: [`${subject} Neden Başlatıldı?`, `${subject} Osmanlı'yı Nasıl Etkiledi?`],
@@ -236,7 +289,7 @@ function titleFor(subject: string, eventFamily: EventFamily, seed: number) {
     person: [`${subject} Osmanlı İçin Neden Önemliydi?`, `${subject} Osmanlı'yı Nasıl Etkiledi?`],
     other: [`${subject} Osmanlı İçin Neden Önemliydi?`, `${subject} Osmanlı'yı Nasıl Etkiledi?`],
   };
-  const list = templates[eventFamily];
+  const list = patternTemplates[pattern] || familyTemplates[eventFamily];
   return list[seed % list.length];
 }
 
@@ -263,11 +316,12 @@ function buildCandidatePool(state: ChannelState) {
     const subscriber = evidenceFor(state, subject, "Abone");
     const like = evidenceFor(state, subject, "Beğeni");
     const eventFamily = family(subject);
+    const winning = winningPatternFor(state, subject);
     seen.add(key);
     candidates.push({
       subject,
       sourceTitle: item.sourceTitle,
-      title: titleFor(subject, eventFamily, index),
+      title: titleFor(subject, eventFamily, index, winning.pattern),
       family: eventFamily,
       topic: detectHistoryTopic(subject),
       ruler: detectOttomanRuler(subject),
@@ -276,6 +330,8 @@ function buildCandidatePool(state: ChannelState) {
       likeScore: like.score,
       evidenceSamples: Math.max(view.samples, subscriber.samples, like.samples),
       viralBonus: item.viralBonus,
+      winningPattern: winning.pattern,
+      patternEvidenceTitle: winning.sourceTitle,
     });
   });
 
@@ -344,7 +400,7 @@ function hashtagsFor(candidate: Candidate) {
 
 function reasonFor(state: ChannelState, candidate: Candidate, objective: Objective) {
   const shorts = state.videos.filter((video) => video.contentType === "SHORT").length;
-  return `${shorts} Shorts'un izlenme hızı, tutma, beğeni ve abone dönüşümü tema düzeyinde analiz edildi. ${candidate.subject} yayın geçmişi ve kalıcı konu hafızasında yeni olarak doğrulandı; aynı olay 30 günlük planda ikinci kez kullanılamaz. Seçim ${candidate.evidenceSamples} yakın tema örneğinin ${objective.toLocaleLowerCase("tr-TR")} sinyaline göre puanlandı.`;
+  return `${shorts} Shorts'un izlenme hızı, tutma, beğeni ve abone dönüşümü analiz edildi. ${candidate.subject} daha önce yayınlanmamış farklı bir tarihî olay olarak doğrulandı. Başlık kalıbı “${candidate.winningPattern}” çünkü kanaldaki ${candidate.patternEvidenceTitle ? `“${candidate.patternEvidenceTitle}” gibi güçlü örnekler` : "güçlü başlıklar"} bu merak yapısında daha iyi sinyal verdi. Aynı olay 30 günlük planda ikinci kez kullanılamaz; seçim ${candidate.evidenceSamples} yakın tema örneğinin ${objective.toLocaleLowerCase("tr-TR")} sinyaline göre puanlandı.`;
 }
 
 function istanbulTodayAtNoon() {
