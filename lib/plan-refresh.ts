@@ -45,8 +45,8 @@ function planningMemory(state: ChannelState) {
 
 /**
  * Sürüm 9: Tüm Shorts geçmişi + Studio aktiflik saatleri kullanan yeni zamanlama
- * modeline geçişte mevcut gelecek planı bir kez zorla yeniden hesaplanır. Sonrasında
- * günlük 21:00 kuralı devam eder.
+ * modeline geçişte mevcut plan bir kez zorla yeniden hesaplanır. Sonrasında günlük
+ * 21:00 kuralı devam eder.
  */
 export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
@@ -64,13 +64,22 @@ export function mergeGeneratedPlanPreservingToday(
   now = new Date(),
 ) {
   const today = istanbulParts(now).date;
-  const lockedToday = state.plan.filter((item) => item.date === today);
+  const publishingStartedToday = state.videos.some((video) =>
+    video.contentType === "SHORT" &&
+    istanbulParts(new Date(video.publishedAt)).date === today,
+  );
+
+  // Gün içinde yayın başladıysa hazırlanmış bugünü bozma. Henüz yayın yoksa yeni
+  // modelin bugünkü saat/adet kararının hemen uygulanmasına izin ver.
+  const todayPlan = publishingStartedToday
+    ? state.plan.filter((item) => item.date === today)
+    : generated.filter((item) => item.date === today);
   const future = generated.filter((item) => item.date > today);
   const memory = planningMemory(state);
 
   return {
     ...state,
-    plan: sortPlan([...lockedToday, ...future]),
+    plan: sortPlan([...todayPlan, ...future]),
     planning: {
       weekKey: currentIstanbulWeekKey(),
       generatedAt: new Date().toISOString(),
