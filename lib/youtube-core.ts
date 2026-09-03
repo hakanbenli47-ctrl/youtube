@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { google } from "googleapis";
 import type { Credentials } from "google-auth-library";
 import type { youtubeAnalytics_v2 } from "googleapis";
+import { persistServerAuth } from "./auth-vault";
 import { getState, saveState } from "./store";
 import type { ChannelState, MetricSnapshot, VideoMetric } from "./schema";
 
@@ -99,17 +100,41 @@ export async function exchangeYouTubeCode(code: string, returnedState: string | 
   if (!mergedTokens.refresh_token) {
     throw new Error("Google yenileme anahtarı vermedi. Google erişimini kaldırıp yeniden bağlan.");
   }
-  await saveState({
-    ...state,
-    auth: { connected: true, tokens: mergedTokens },
-    sync: { ...state.sync, status: "ready", message: "YouTube bağlandı; kapsamlı senkron hazır." },
-  });
+
+  // Refresh token'ı büyük Analytics state'inden bağımsız küçük bir kasada da tut.
+  // Ana state geçici olarak okunamazsa bile bağlantı buradan geri yüklenebilir.
+  await persistServerAuth(mergedTokens);
+
+  try {
+    await saveState({
+      ...state,
+      auth: { connected: true, tokens: mergedTokens },
+      sync: { ...state.sync, status: "ready", message: "YouTube bağlandı; kalıcı bağlantı kasası hazır." },
+    });
+  } catch (error) {
+    // Tarayıcıdaki şifreli auth cookie callback'te ayrıca yazılacağı için
+    // ana state yazımı geçici olarak başarısız olsa bile kullanıcıyı yeniden OAuth'a zorlama.
+    console.error("YouTube bağlantısı ana state'e yazılamadı; OAuth kasası ve tarayıcı oturumu korunuyor.", error);
+  }
+
+  return mergedTokens;
 }
 
 export async function authenticatedClient(state: ChannelState) {
   if (!state.auth.connected || !state.auth.tokens) throw new Error("YouTube hesabı henüz bağlı değil.");
+  const sourceTokens = state.auth.tokens;
+  await persistServerAuth(sourceTokens);
+
   const client = oauthClient();
-  client.setCredentials(state.auth.tokens as Credentials);
+  client.setCredentials(sourceTokens as Credentials);
+  client.on("tokens", (tokens) => {
+    const mergedTokens = {
+      ...sourceTokens,
+      ...(tokens as Record<string, unknown>),
+    };
+    void persistServerAuth(mergedTokens).catch((error) =>
+      console.error("Yenilenen Google anahtarı OAuth kasasına kaydedilemedi.", error));
+  });
   return client;
 }
 
