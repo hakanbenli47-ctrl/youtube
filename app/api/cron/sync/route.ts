@@ -1,4 +1,5 @@
 import { buildDashboard } from "@/lib/analytics";
+import { recoverServerAuth } from "@/lib/auth-vault";
 import { maybeRefreshFuturePlan } from "@/lib/plan-refresh";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
@@ -21,7 +22,11 @@ export async function GET(request: Request) {
   try {
     return await withStateLock("youtube-sync", async () => {
       let state = await getState();
-      if (!state.auth.connected) {
+      const serverRecovery = await recoverServerAuth(state);
+      state = serverRecovery.state;
+      if (serverRecovery.recovered) await saveState(state);
+
+      if (!state.auth.connected || !state.auth.tokens) {
         return Response.json({
           skipped: true,
           reason: "YouTube bağlantısı bekleniyor",
