@@ -133,8 +133,11 @@ function rawMetric(
 }
 
 function qualityFactor(video: VideoMetric) {
-  const retention = video.avgViewPercentage > 0
-    ? clamp(video.avgViewPercentage / 75, 0.72, 1.28)
+  const retentionValue = video.avgViewPercentage > 0 && (video.retention10Percent || 0) > 0
+    ? video.avgViewPercentage * 0.65 + (video.retention10Percent || 0) * 0.35
+    : video.avgViewPercentage || video.retention10Percent || 0;
+  const retention = retentionValue > 0
+    ? clamp(retentionValue / 75, 0.72, 1.28)
     : 1;
   const engaged = (video.engagedViewRate || 0) > 0
     ? clamp((video.engagedViewRate || 0) / 60, 0.78, 1.22)
