@@ -26,6 +26,11 @@ export type VideoMetric = {
   ctr: number | null;
   avgViewDurationSeconds: number;
   avgViewPercentage: number;
+  retention10Percent?: number;
+  retention50Percent?: number;
+  retention90Percent?: number;
+  relativeRetention10Percent?: number;
+  retentionUpdatedAt?: string;
   likes: number;
   comments: number;
   shares?: number;
