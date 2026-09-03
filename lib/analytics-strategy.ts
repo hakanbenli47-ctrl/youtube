@@ -49,6 +49,13 @@ function interactionRate(video: VideoMetric) {
 function subscriberRate(video: VideoMetric) {
   return (Math.max(0, netSubscribers(video)) / Math.max(video.analyticsViews || video.views, 1)) * 1000;
 }
+
+function retentionSignal(video: VideoMetric) {
+  const averageRetention = video.avgViewPercentage || 0;
+  const earlyRetention = video.retention10Percent || 0;
+  if (averageRetention > 0 && earlyRetention > 0) return averageRetention * 0.65 + earlyRetention * 0.35;
+  return averageRetention || earlyRetention;
+}
 function indexed(value: number, baseline: number, sensitivity: number) {
   if (value <= 0) return 35;
   const ratio = (value + baseline * 0.2) / Math.max(0.0001, baseline * 1.2);
