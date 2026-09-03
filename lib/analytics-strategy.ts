@@ -37,8 +37,11 @@ function engagedRate(video: VideoMetric) {
 }
 function velocity(video: VideoMetric) {
   if ((video.recentVelocity || 0) > 0) return video.recentVelocity || 0;
-  if ((video.viewsLast7Days || 0) > 0) return (video.viewsLast7Days || 0) / Math.min(7, ageDays(video));
-  return video.views / Math.max(1, Math.min(28, ageDays(video)));
+  const age = ageDays(video);
+  if ((video.viewsLast7Days || 0) > 0) return (video.viewsLast7Days || 0) / Math.max(1, Math.min(7, age));
+  if ((video.viewsLast28Days || 0) > 0) return (video.viewsLast28Days || 0) / Math.max(1, Math.min(28, age));
+  if (age <= 28) return video.views / Math.max(1, age);
+  return 0;
 }
 function interactionRate(video: VideoMetric) {
   return ((video.likes + video.comments * 2 + (video.shares || 0) * 3) / Math.max(video.views, 1)) * 100;
