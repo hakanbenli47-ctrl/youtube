@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { ChannelState, DashboardData, VideoMetric } from "./schema";
+import type { ChannelState, DashboardData, PostingSlot, VideoMetric } from "./schema";
 import { publicState } from "./store";
 import { buildAdaptiveWeeklySchedule, currentIstanbulWeekKey, nextWeeklyReviewAt } from "./scheduling";
 import {
@@ -42,12 +42,23 @@ function percentChange(current: number, previous: number) {
 
 export function buildDashboard(state: ChannelState): DashboardData {
   const daily = [...state.daily].sort((left, right) => left.date.localeCompare(right.date));
-  const last7 = daily.slice(-7);
-  const previous7 = daily.slice(-14, -7);
+  const latestDate = daily.at(-1)?.date;
+  const latestTime = latestDate ? new Date(`${latestDate}T12:00:00Z`).getTime() : Date.now();
+  const last7Start = latestTime - 6 * DAY_MS;
+  const previous7Start = latestTime - 13 * DAY_MS;
+  const previous7End = latestTime - 7 * DAY_MS;
+  const last7 = daily.filter((day) => {
+    const time = new Date(`${day.date}T12:00:00Z`).getTime();
+    return time >= last7Start && time <= latestTime;
+  });
+  const previous7 = daily.filter((day) => {
+    const time = new Date(`${day.date}T12:00:00Z`).getTime();
+    return time >= previous7Start && time <= previous7End;
+  });
   const last7Views = sum(last7.map((day) => day.views));
   const previous7Views = sum(previous7.map((day) => day.views));
   let last7Subscribers = sum(last7.map((day) => day.subscribersGained - day.subscribersLost));
-  if (last7Subscribers === 0) {
+  if (!last7.length) {
     const threshold = Date.now() - 8 * DAY_MS;
     last7Subscribers = sum(state.videos
       .filter((video) => new Date(video.publishedAt).getTime() >= threshold)
@@ -57,7 +68,7 @@ export function buildDashboard(state: ChannelState): DashboardData {
   const deadline = new Date(`${state.goals.deadline}T23:59:59`).getTime();
   const daysRemaining = Math.max(1, Math.ceil((deadline - Date.now()) / DAY_MS));
   const subscriberGrowthRequired = Math.max(0, state.goals.subscriberTarget - state.channel.subscriberCount);
-  const conversionBase = state.totals.analyticsViews || state.totals.views;
+  const conversionBase = sum(daily.map((day) => day.views)) || state.totals.analyticsViews || state.totals.views;
   const conversion = conversionBase > 0 && state.totals.netSubscribers > 0
     ? state.totals.netSubscribers / conversionBase
     : 0.003;
@@ -83,15 +94,27 @@ export function buildDashboard(state: ChannelState): DashboardData {
 
   const topicInsights = buildTopicInsights(state);
   const repetitionAlerts = buildRepetitionAlerts(state, topicInsights);
-  const postingSlots = buildPostingSlots(state);
-  const weeklySchedule = state.planning?.weeklySchedule || buildAdaptiveWeeklySchedule(state);
+  const weeklySchedule = buildAdaptiveWeeklySchedule(state);
+  const postingSlots: PostingSlot[] = weeklySchedule.flatMap((day) =>
+    (day.shortSlots || []).map((slot, index) => ({
+      id: `adaptive-${day.day}-${index}`,
+      dayLabel: day.dayLabel,
+      time: slot.time,
+      format: "Shorts" as const,
+      sampleSize: slot.sampleSize,
+      score: slot.score,
+      confidence: day.confidence,
+      reason: slot.reason,
+    })));
   const recommendations = buildRecommendations(state, topicInsights, repetitionAlerts, postingSlots);
   const shorts = state.videos.filter((video) => video.contentType === "SHORT" && video.views > 0);
   const base = baselines(shorts.length ? shorts : state.videos.filter((video) => video.views > 0));
   const hydratedState = { ...state, recommendations };
   const changedSlotCount = weeklySchedule.flatMap((day) => day.shortSlots || [])
     .filter((slot) => slot.change === "Değişti").length;
-  const dailyLockSummary = "Günlük düzen 6 Shorts: 09:00, 11:00, 13:00, 15:00, 17:00 ve 19:00. Bugünün konuları kilitli; yarın ve sonrası her gün saat 21:00'da son izlenme, tutma, beğeni ve abone verisine göre yeniden hesaplanır.";
+  const dailyCount = weeklySchedule[0]?.shortSlots?.length || weeklySchedule[0]?.shortsTimes.length || 0;
+  const hasAudienceActivity = (state.audienceActivity || []).some((day) => day.hours.length > 0);
+  const dailyLockSummary = `Günlük düzen şu an ${dailyCount} Shorts. Saatler ${hasAudienceActivity ? "Studio son 28 günlük aktif izleyici saatleri ve gerçek kanal performansı" : "gerçek kanal performansı"} ile seçiliyor; gelecek plan her İstanbul gününde yeniden hesaplanıyor.`;
 
   return {
     state: publicState(hydratedState),

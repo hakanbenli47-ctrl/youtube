@@ -488,9 +488,12 @@ export default function LiveAnalyticsV3() {
   }
 
   useEffect(() => {
-    void load(true);
+    const initial = window.setTimeout(() => void load(true), 0);
     const timer = window.setInterval(() => void load(false), 90_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
   }, []);
 
   const derivedMap = useMemo(() => {

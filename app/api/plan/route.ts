@@ -15,8 +15,8 @@ export async function POST(request: Request) {
     generated = await enhancePlanWithOllama(state, generated);
   }
 
-  // Bugünün hazırlanmış 6 konusu kilitlidir. Manuel hesaplama yalnızca yarın ve
-  // sonrasını kanalın güncel video sonuçlarıyla değiştirir.
+  // Bugünün hazırlanmış yayınları kilitlidir. Manuel hesaplama yalnızca yarın ve
+  // sonrasını güncel konu, paylaşım sayısı, aktif saat ve performans verisiyle değiştirir.
   state = mergeGeneratedPlanPreservingToday(state, generated, weeklySchedule);
   await saveState(state);
   return Response.json(buildDashboard(state));

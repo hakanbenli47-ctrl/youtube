@@ -35,6 +35,7 @@ import {
   YAxis,
 } from "recharts";
 import type {
+  AudienceActivityDay,
   CombinationInsight,
   DashboardData,
   PlanItem,
@@ -102,7 +103,10 @@ function displayDay(date: string) {
 function scoreVideo(video: VideoMetric) {
   const conversion =
     ((video.subscribersGained - video.subscribersLost) / Math.max(video.views, 1)) * 1000;
-  const retention = Math.min(100, video.avgViewPercentage);
+  const retentionValue = video.avgViewPercentage > 0 && (video.retention10Percent || 0) > 0
+    ? video.avgViewPercentage * 0.65 + (video.retention10Percent || 0) * 0.35
+    : video.avgViewPercentage || video.retention10Percent || 0;
+  const retention = Math.min(100, retentionValue);
   const reach = Math.min(100, Math.log10(video.views + 1) * 24);
   return Math.round(
     reach * 0.45 + retention * 0.35 + Math.min(100, conversion * 8) * 0.2,
@@ -500,12 +504,12 @@ export default function Home() {
                 <CircleAlert size={24} />
                 <div>
                   <span>Şu an hedef hızının %{decimal.format(derived.pacePercent)} seviyesindesin.</span>
-                  <p>Günlük ortalaman <b>{compact.format(shortsGrowthGoal.currentViewsPerDay)}</b>; gereken günlük hız <b>{compact.format(shortsGrowthGoal.requiredViewsPerDay)}</b>. Bu yüzden aynı konuyu tekrarlamak yerine, 6 ayrı içeriği kanalındaki gerçek sonuçlarla kontrollü test edeceğiz.</p>
+                  <p>Günlük ortalaman <b>{compact.format(shortsGrowthGoal.currentViewsPerDay)}</b>; 90 günlük sürdürülebilir hedef hızı <b>{compact.format(shortsGrowthGoal.requiredViewsPerDay)}</b>. Aynı olayı tekrarlamak yerine, günlük paylaşım sayısı ve saatleri aktif izleyici verisiyle birlikte kontrollü test edilir.</p>
                 </div>
               </div>
               <details className="calculation-details">
                 <summary>Bu hedef nasıl hesaplandı?</summary>
-                <p>YouTube iş ortağı hedefi için son 90 gündeki geçerli, herkese açık Shorts Akışı izlenmeleri kullanılır. Sistem yalnızca tamamlanan günleri ve Shorts Akışı kaynaklı etkileşimli izlenmeleri sayar. Abone hedefi ayrıca takip edilir.</p>
+                <p>Shorts hedefi kayan son 90 gündür; sabit bir 90 günlük geri sayım değildir. Panel API’deki etkileşimli Shorts verisini YPP için yakın tahmin olarak kullanır; kesin uygunluk sayacı YouTube Studio Kazanç bölümündedir. Abone hedefi ayrıca takip edilir.</p>
               </details>
             </section>
 
@@ -513,7 +517,7 @@ export default function Home() {
               <article>
                 <TrendingUp size={21} />
                 <h3>Neyi çoğalt?</h3>
-                <p>{derived.strongest ? `${derived.strongest.label} yapısını yeni olaylarla tekrar test et.` : "Altı farklı içerikte güçlü soru kalıplarını test et."}</p>
+                <p>{derived.strongest ? `${derived.strongest.label} yapısını yeni olaylarla tekrar test et.` : "Farklı tarihî olaylarda güçlü başlık kalıplarını kontrollü test et."}</p>
                 <button onClick={() => setActiveTab("winners")}>Kanıtları aç</button>
               </article>
               <article>
@@ -570,7 +574,7 @@ export default function Home() {
         {activeTab === "plan" && (
           <>
             <section className="plan-intro">
-              <div><span>30 GÜNDE 180 SHORTS</span><h2>Her gün ne çekeceğin hazır.</h2><p>Aynı başlık ve olay tekrar edilmez. Perşembe akşamları bir padişahın hayatı uzun video olarak yayınlanır.</p></div>
+              <div><span>30 GÜNLÜK ADAPTİF PLAN</span><h2>Her gün ne çekeceğin veriye göre hazır.</h2><p>Aynı tarihî olay tekrar edilmez. Tutan başlık kalıbı yeni konuya taşınır; günlük Shorts sayısı ve saatleri kanal performansına göre değişebilir.</p></div>
               <button className="primary-button" disabled={Boolean(busy)} onClick={() => runAction("plan", "/api/plan", { body: JSON.stringify({ useLocalAi: false }) })}><Sparkles size={17} /> Planı yeniden hesapla</button>
             </section>
             <section className="weekly-strip">
@@ -607,7 +611,7 @@ export default function Home() {
                         <td><span>{video.topic}</span><strong>{video.title}</strong></td>
                         <td><b className="type-pill">{video.contentType === "SHORT" ? "Shorts" : "Uzun"}</b></td>
                         <td>{whole.format(video.views)}</td>
-                        <td>%{decimal.format(video.avgViewPercentage)}</td>
+                        <td>%{decimal.format(video.avgViewPercentage)}{(video.retention10Percent || 0) > 0 ? <small> · %10 noktası %{decimal.format(video.retention10Percent || 0)}</small> : null}</td>
                         <td>{decimal.format(conversion)}</td>
                         <td><b className={`result-pill ${score >= 70 ? "good" : score < 45 ? "bad" : "test"}`}>{score >= 70 ? "Güçlü" : score < 45 ? "Zayıf" : "Test et"} · {score}</b></td>
                       </tr>
@@ -638,6 +642,7 @@ export default function Home() {
               <button className="secondary-button" disabled={Boolean(busy)} onClick={() => fileRef.current?.click()}><Upload size={17} /> Studio ZIP yükle</button>
               <small>Son yükleme: {formatDate(state.sync.lastStudioImport)}</small>
             </article>
+            <AudienceActivitySettings data={data} onUpdated={setData} onNotice={setNotice} />
             <GoalSettings data={data} onUpdated={setData} onNotice={setNotice} />
             <article className="setting-card status-card">
               <Eye size={24} />
@@ -708,6 +713,99 @@ function PlanDetail({ item, onClose, onNotice }: { item: PlanItem; onClose: () =
 
 function RepeatIcon() {
   return <CircleAlert size={24} />;
+}
+
+function AudienceActivitySettings({
+  data,
+  onUpdated,
+  onNotice,
+}: {
+  data: DashboardData;
+  onUpdated: (value: DashboardData) => void;
+  onNotice: (value: string) => void;
+}) {
+  const days = [
+    { day: 1, label: "Pazartesi" },
+    { day: 2, label: "Salı" },
+    { day: 3, label: "Çarşamba" },
+    { day: 4, label: "Perşembe" },
+    { day: 5, label: "Cuma" },
+    { day: 6, label: "Cumartesi" },
+    { day: 0, label: "Pazar" },
+  ];
+  const initial = Object.fromEntries(days.map(({ day }) => {
+    const stored = (data.state.audienceActivity || []).find((item) => item.day === day);
+    const value = [...(stored?.hours || [])]
+      .sort((a, b) => b.score - a.score)
+      .map((row) => String(row.hour).padStart(2, "0"))
+      .join(", ");
+    return [String(day), value];
+  }));
+  const [hours, setHours] = useState<Record<string, string>>(initial);
+  const [saving, setSaving] = useState(false);
+
+  async function saveActivity() {
+    const audienceActivity: AudienceActivityDay[] = days.map(({ day, label }) => {
+      const parsed = hours[String(day)]
+        .split(/[\s,;]+/)
+        .map((value) => Number(value.replace(":00", "")))
+        .filter((value) => Number.isFinite(value) && value >= 0 && value <= 23);
+      const unique = [...new Set(parsed)];
+      return {
+        day,
+        dayLabel: label,
+        hours: unique.map((hour, index) => ({
+          hour,
+          score: Math.max(55, 100 - index * 12),
+        })),
+      };
+    });
+    setSaving(true);
+    try {
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscriberTarget: data.state.goals.subscriberTarget,
+          deadline: data.state.goals.deadline,
+          audienceActivity,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Aktif saatler kaydedilemedi.");
+      onUpdated(payload as DashboardData);
+      onNotice("Aktif izleyici saatleri kaydedildi; paylaşım planı yeniden hesaplandı.");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Aktif saatler kaydedilemedi.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <article className="setting-card audience-activity-card">
+      <Clock3 size={24} />
+      <span>STUDIO AKTİF İZLEYİCİ SAATLERİ</span>
+      <h2>Paylaşımı kitlenin aktifliğine bağla</h2>
+      <p>YouTube Studio → Analytics → Kitle bölümündeki en koyu saatleri, en güçlü saatten başlayarak yaz. Örnek: 10, 11, 20.</p>
+      <div className="activity-inputs">
+        {days.map(({ day, label }) => (
+          <label key={day}>
+            {label}
+            <input
+              value={hours[String(day)] || ""}
+              placeholder="10, 11, 20"
+              onChange={(event) => setHours((current) => ({ ...current, [String(day)]: event.target.value }))}
+            />
+          </label>
+        ))}
+      </div>
+      <button className="secondary-button" disabled={saving} onClick={saveActivity}>
+        <Clock3 size={17} /> Aktif saatleri kaydet
+      </button>
+      <small>İlk saat en güçlü kabul edilir. Sistem bu veriyi geçmiş video performansıyla birleştirir.</small>
+    </article>
+  );
 }
 
 function GoalSettings({

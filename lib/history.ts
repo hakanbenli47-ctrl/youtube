@@ -112,6 +112,7 @@ export function detectOttomanRuler(title: string) {
 }
 
 export function detectHookPattern(title: string) {
+  if (/\b5\b|en\s+(?:çok|iyi|büyük|güçlü|önemli|şaşırtıcı|inanılmaz)/i.test(title)) return "Liste / En Güçlü";
   if (/giz|saklan|şaşırt|inanılmaz/i.test(title)) return "Gizem / Şaşırtıcı";
   if (/neden/i.test(title)) return "Neden?";
   if (/nasıl/i.test(title)) return "Nasıl?";

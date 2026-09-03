@@ -44,11 +44,16 @@ export function ageDays(video: VideoMetric) {
 }
 
 export function velocity(video: VideoMetric) {
-  if ((video.recentVelocity || 0) > 0) return video.recentVelocity || 0;
+  const age = ageDays(video);
   if ((video.viewsLast7Days || 0) > 0) {
-    return (video.viewsLast7Days || 0) / Math.min(7, ageDays(video));
+    return (video.viewsLast7Days || 0) / Math.max(1, Math.min(7, age));
   }
-  return video.views / Math.max(1, Math.min(28, ageDays(video)));
+  if ((video.viewsLast28Days || 0) > 0) {
+    return (video.viewsLast28Days || 0) / Math.max(1, Math.min(28, age));
+  }
+  if (age <= 8 && (video.recentVelocity || 0) > 0) return video.recentVelocity || 0;
+  if (age <= 28) return video.views / Math.max(1, age);
+  return 0;
 }
 
 export function engagedRate(video: VideoMetric) {
@@ -69,6 +74,13 @@ function subscriberRate(video: VideoMetric) {
     Math.max(video.analyticsViews || video.views, 1)) * 1000;
 }
 
+function retentionSignal(video: VideoMetric) {
+  const averageRetention = video.avgViewPercentage || 0;
+  const earlyRetention = video.retention10Percent || 0;
+  if (averageRetention > 0 && earlyRetention > 0) return averageRetention * 0.65 + earlyRetention * 0.35;
+  return averageRetention || earlyRetention;
+}
+
 type Baselines = {
   velocity: number;
   retention: number;
@@ -78,7 +90,7 @@ type Baselines = {
 };
 
 export function baselines(videos: VideoMetric[]): Baselines {
-  const retentions = videos.map((video) => video.avgViewPercentage).filter((value) => value > 0);
+  const retentions = videos.map(retentionSignal).filter((value) => value > 0);
   const engaged = videos.map(engagedRate).filter((value) => value > 0);
   return {
     velocity: Math.max(1, median(videos.map(velocity))),
@@ -97,8 +109,9 @@ function indexed(value: number, baseline: number, sensitivity: number) {
 
 export function quality(video: VideoMetric, base: Baselines) {
   const reach = indexed(velocity(video), base.velocity, 18);
-  const retention = video.avgViewPercentage > 0
-    ? indexed(video.avgViewPercentage, base.retention, 15)
+  const retentionValue = retentionSignal(video);
+  const retention = retentionValue > 0
+    ? indexed(retentionValue, base.retention, 15)
     : 45;
   const engaged = engagedRate(video) > 0
     ? indexed(engagedRate(video), base.engaged, 14)
@@ -199,29 +212,31 @@ export function buildWinningCombinations(state: ChannelState): CombinationInsigh
 export function buildShortsGrowthGoal(state: ChannelState) {
   const targetViews = 10_000_000;
   const windowDays = 90;
-  const cutoff = Date.now() - windowDays * DAY_MS;
+  const cutoff = Date.now() - (windowDays - 1) * DAY_MS;
   const reported = sum((state.shortsDaily || [])
-    .filter((day) => new Date(`${day.date}T23:59:59`).getTime() >= cutoff)
+    .filter((day) => new Date(`${day.date}T12:00:00+03:00`).getTime() >= cutoff)
     .map((day) => day.engagedViews || 0));
   const fallback = sum(state.videos
     .filter((video) => video.contentType === "SHORT" && new Date(video.publishedAt).getTime() >= cutoff)
     .map((video) => video.engagedViews || 0));
   const currentViews = reported || fallback;
-  const last7 = (state.shortsDaily || []).slice(-7);
+  const last7 = (state.shortsDaily || []).filter((day) =>
+    new Date(`${day.date}T12:00:00+03:00`).getTime() >= Date.now() - 6 * DAY_MS);
   const currentViewsPerDay = last7.length
-    ? sum(last7.map((day) => day.engagedViews || 0)) / 7
+    ? sum(last7.map((day) => day.engagedViews || 0)) / last7.length
     : sum(state.videos
       .filter((video) => video.contentType === "SHORT")
       .map((video) => video.engagedViewsLast7Days || 0)) / 7;
   const remainingViews = Math.max(0, targetViews - currentViews);
   const subscribersRemaining = Math.max(0, 1000 - state.channel.subscriberCount);
-  const paceRatio = currentViewsPerDay / Math.max(remainingViews / windowDays, 1);
+  const requiredViewsPerDay = targetViews / windowDays;
+  const paceRatio = currentViewsPerDay / Math.max(requiredViewsPerDay, 1);
   return {
     targetViews,
     windowDays,
     currentViews,
     remainingViews,
-    requiredViewsPerDay: remainingViews / windowDays,
+    requiredViewsPerDay,
     currentViewsPerDay,
     projectedWindowViews: Math.round(currentViewsPerDay * windowDays),
     progressPercent: Math.min(100, currentViews / targetViews * 100),

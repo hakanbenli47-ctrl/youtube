@@ -198,10 +198,20 @@ function freshSubjectTitle(subject: string, index: number) {
 }
 
 function ownVideoStrength(video: VideoMetric) {
-  const dailyVelocity = (video.recentVelocity || 0) > 0
-    ? video.recentVelocity || 0
-    : (video.engagedViews ?? video.views) / Math.max(1, Math.min(21, ageDays(video)));
-  const retention = video.avgViewPercentage > 0 ? clamp(video.avgViewPercentage / 85, 0.5, 1.35) : 0.85;
+  const age = ageDays(video);
+  const dailyVelocity = (video.viewsLast7Days || 0) > 0
+    ? (video.viewsLast7Days || 0) / Math.max(1, Math.min(7, age))
+    : (video.viewsLast28Days || 0) > 0
+      ? (video.viewsLast28Days || 0) / Math.max(1, Math.min(28, age))
+      : age <= 8 && (video.recentVelocity || 0) > 0
+        ? video.recentVelocity || 0
+        : age <= 28
+          ? video.views / Math.max(1, age)
+          : 0;
+  const retentionValue = video.avgViewPercentage > 0 && (video.retention10Percent || 0) > 0
+    ? video.avgViewPercentage * 0.65 + (video.retention10Percent || 0) * 0.35
+    : video.avgViewPercentage || video.retention10Percent || 0;
+  const retention = retentionValue > 0 ? clamp(retentionValue / 85, 0.5, 1.35) : 0.85;
   const engaged = (video.engagedViewRate || 0) > 0 ? clamp((video.engagedViewRate || 0) / 65, 0.55, 1.35) : 0.85;
   const likeRate = video.likes / Math.max(video.views, 1) * 100;
   const subscriberRate = Math.max(0, video.subscribersGained - video.subscribersLost) / Math.max(video.analyticsViews || video.views, 1) * 1000;

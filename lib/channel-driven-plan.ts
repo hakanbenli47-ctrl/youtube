@@ -2,7 +2,7 @@ import "server-only";
 
 import { addDays, format } from "date-fns";
 import { tr } from "date-fns/locale";
-import { detectHistoryTopic, detectOttomanRuler } from "./history";
+import { detectHistoryTopic, detectHookPattern, detectOttomanRuler } from "./history";
 import type { ChannelState, PlanItem, VideoMetric, WeeklyScheduleDay } from "./schema";
 import { buildViralTopicCandidates } from "./topic-sourcing";
 
@@ -32,6 +32,8 @@ type Candidate = {
   likeScore: number;
   evidenceSamples: number;
   viralBonus: number;
+  winningPattern: string;
+  patternEvidenceTitle?: string;
 };
 
 type PlanningMemory = {
@@ -183,7 +185,10 @@ function videoAgeDays(video: VideoMetric) {
 }
 
 function objectiveValue(video: VideoMetric, objective: Objective) {
-  const retention = video.avgViewPercentage > 0 ? clamp(video.avgViewPercentage / 80, 0.65, 1.35) : 1;
+  const retentionValue = video.avgViewPercentage > 0 && (video.retention10Percent || 0) > 0
+    ? video.avgViewPercentage * 0.65 + (video.retention10Percent || 0) * 0.35
+    : video.avgViewPercentage || video.retention10Percent || 0;
+  const retention = retentionValue > 0 ? clamp(retentionValue / 80, 0.65, 1.35) : 1;
   const engaged = (video.engagedViewRate || 0) > 0 ? clamp((video.engagedViewRate || 0) / 60, 0.7, 1.3) : 1;
   const quality = Math.sqrt(retention * engaged);
   if (objective === "Abone") {
@@ -193,7 +198,16 @@ function objectiveValue(video: VideoMetric, objective: Objective) {
   if (objective === "Beğeni") {
     return (video.likes / Math.max(video.views, 1)) * 1000 * quality;
   }
-  const speed = video.recentVelocity || (video.engagedViews || video.views) / Math.max(1, Math.min(21, videoAgeDays(video)));
+  const age = videoAgeDays(video);
+  const speed = (video.viewsLast7Days || 0) > 0
+    ? (video.viewsLast7Days || 0) / Math.max(1, Math.min(7, age))
+    : (video.viewsLast28Days || 0) > 0
+      ? (video.viewsLast28Days || 0) / Math.max(1, Math.min(28, age))
+      : age <= 8 && (video.recentVelocity || 0) > 0
+        ? video.recentVelocity || 0
+        : age <= 28
+          ? video.views / Math.max(1, age)
+          : 0;
   return Math.log10(speed + 10) * 25 * quality;
 }
 
@@ -222,8 +236,59 @@ function evidenceFor(state: ChannelState, subject: string, objective: Objective)
   return { score, samples: rows.filter((row) => row.relevance >= 0.35).length };
 }
 
-function titleFor(subject: string, eventFamily: EventFamily, seed: number) {
-  const templates: Record<EventFamily, string[]> = {
+function winningPatternFor(state: ChannelState, subject: string) {
+  const shorts = state.videos
+    .filter((video) => video.contentType === "SHORT" && video.views > 0)
+    .map((video) => {
+      const relevance = themeRelevance(subject, video);
+      const performance =
+        objectiveValue(video, "İzlenme") +
+        objectiveValue(video, "Abone") * 8 +
+        objectiveValue(video, "Beğeni") * 0.35;
+      return { video, relevance, performance, score: performance * (0.65 + relevance * 0.75) };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  const related = shorts.find((row) => row.relevance >= 0.35);
+  const source = related || shorts[0];
+  return source
+    ? { pattern: detectHookPattern(source.video.title), sourceTitle: source.video.title }
+    : { pattern: "Doğrudan Soru", sourceTitle: undefined };
+}
+
+function titleFor(subject: string, eventFamily: EventFamily, seed: number, pattern: string) {
+  const patternTemplates: Record<string, string[]> = {
+    "Liste / En Güçlü": [
+      `${subject} Hakkında Bilinmesi Gereken 5 Şey`,
+      `${subject} Hakkındaki En Şaşırtıcı 5 Ayrıntı`,
+      `${subject} Osmanlı'yı Değiştiren 5 Nokta`,
+    ],
+    "Neden?": [
+      `${subject} Neden Bu Kadar Önemliydi?`,
+      `${subject} Neden Osmanlı İçin Kırılma Noktası Oldu?`,
+    ],
+    "Nasıl?": [
+      `${subject} Osmanlı'yı Nasıl Etkiledi?`,
+      `${subject} Dengeleri Nasıl Değiştirdi?`,
+    ],
+    "Gizem / Şaşırtıcı": [
+      `${subject} Hakkındaki En Şaşırtıcı Gerçek Neydi?`,
+      `${subject} Hakkında Pek Bilinmeyen Ayrıntı Ne?`,
+    ],
+    "İlk / Başlangıç": [
+      `${subject} Osmanlı'da Neyi Başlattı?`,
+      `${subject} Neden Yeni Bir Dönemin Başlangıcıydı?`,
+    ],
+    "Ölüm / Son Günler": [
+      `${subject} Sonrasında Osmanlı'da Ne Değişti?`,
+      `${subject} Neden Bir Dönemin Sonu Oldu?`,
+    ],
+    "Doğrudan Soru": [
+      `${subject} Gerçekte Ne Oldu?`,
+      `${subject} Osmanlı İçin Neyi Değiştirdi?`,
+    ],
+  };
+  const familyTemplates: Record<EventFamily, string[]> = {
     conquest: [`${subject} Osmanlı İçin Neden Bu Kadar Önemliydi?`, `${subject} Sonrası Ne Değişti?`],
     loss: [`${subject} Osmanlı'yı Nasıl Sarstı?`, `${subject} Sonrası Osmanlı'da Ne Değişti?`],
     campaign: [`${subject} Neden Başlatıldı?`, `${subject} Osmanlı'yı Nasıl Etkiledi?`],
@@ -236,7 +301,7 @@ function titleFor(subject: string, eventFamily: EventFamily, seed: number) {
     person: [`${subject} Osmanlı İçin Neden Önemliydi?`, `${subject} Osmanlı'yı Nasıl Etkiledi?`],
     other: [`${subject} Osmanlı İçin Neden Önemliydi?`, `${subject} Osmanlı'yı Nasıl Etkiledi?`],
   };
-  const list = templates[eventFamily];
+  const list = patternTemplates[pattern] || familyTemplates[eventFamily];
   return list[seed % list.length];
 }
 
@@ -263,11 +328,12 @@ function buildCandidatePool(state: ChannelState) {
     const subscriber = evidenceFor(state, subject, "Abone");
     const like = evidenceFor(state, subject, "Beğeni");
     const eventFamily = family(subject);
+    const winning = winningPatternFor(state, subject);
     seen.add(key);
     candidates.push({
       subject,
       sourceTitle: item.sourceTitle,
-      title: titleFor(subject, eventFamily, index),
+      title: titleFor(subject, eventFamily, index, winning.pattern),
       family: eventFamily,
       topic: detectHistoryTopic(subject),
       ruler: detectOttomanRuler(subject),
@@ -276,6 +342,8 @@ function buildCandidatePool(state: ChannelState) {
       likeScore: like.score,
       evidenceSamples: Math.max(view.samples, subscriber.samples, like.samples),
       viralBonus: item.viralBonus,
+      winningPattern: winning.pattern,
+      patternEvidenceTitle: winning.sourceTitle,
     });
   });
 
@@ -344,7 +412,7 @@ function hashtagsFor(candidate: Candidate) {
 
 function reasonFor(state: ChannelState, candidate: Candidate, objective: Objective) {
   const shorts = state.videos.filter((video) => video.contentType === "SHORT").length;
-  return `${shorts} Shorts'un izlenme hızı, tutma, beğeni ve abone dönüşümü tema düzeyinde analiz edildi. ${candidate.subject} yayın geçmişi ve kalıcı konu hafızasında yeni olarak doğrulandı; aynı olay 30 günlük planda ikinci kez kullanılamaz. Seçim ${candidate.evidenceSamples} yakın tema örneğinin ${objective.toLocaleLowerCase("tr-TR")} sinyaline göre puanlandı.`;
+  return `${shorts} Shorts'un izlenme hızı, tutma, beğeni ve abone dönüşümü analiz edildi. ${candidate.subject} daha önce yayınlanmamış farklı bir tarihî olay olarak doğrulandı. Başlık kalıbı “${candidate.winningPattern}” çünkü kanaldaki ${candidate.patternEvidenceTitle ? `“${candidate.patternEvidenceTitle}” gibi güçlü örnekler` : "güçlü başlıklar"} bu merak yapısında daha iyi sinyal verdi. Aynı olay 30 günlük planda ikinci kez kullanılamaz; seçim ${candidate.evidenceSamples} yakın tema örneğinin ${objective.toLocaleLowerCase("tr-TR")} sinyaline göre puanlandı.`;
 }
 
 function istanbulTodayAtNoon() {
@@ -420,6 +488,41 @@ export function generateChannelDrivenPlan(
         estimatedSeconds: content.estimatedSeconds,
         strategyMode: candidate.evidenceSamples >= 5 ? "Kazananı büyüt" : candidate.evidenceSamples >= 2 ? "Denge" : "Kontrollü test",
       });
+    }
+
+    if (schedule.longVideoTime) {
+      const longCandidate = selectCandidate(
+        candidates,
+        "İzlenme",
+        used,
+        usedRulersToday,
+        usedFamiliesToday,
+        dayIndex * 29 + 7,
+      );
+      if (longCandidate) {
+        used.push(longCandidate);
+        const longTitle = `${longCandidate.subject}: Osmanlı Tarihinde Asıl Kırılma Neydi?`;
+        plan.push({
+          id: `${dateKey}-long`,
+          date: dateKey,
+          dayLabel: format(date, "EEEE", { locale: tr }),
+          format: "Uzun Video",
+          title: longTitle,
+          hook: `${longCandidate.subject} anlatılırken çoğu kişinin atladığı asıl kırılma noktası neydi?`,
+          duration: "8–12 dk",
+          publishTime: schedule.longVideoTime,
+          pillar: longCandidate.topic,
+          objective: "İzlenme Süresi",
+          priority: "Yüksek",
+          reason: `Uzun video konusu da daha önce yayınlanmamış olay havuzundan seçildi. ${longCandidate.patternEvidenceTitle ? `Kanalda “${longCandidate.patternEvidenceTitle}” gibi çalışan merak yapısı referans alındı.` : ""}`,
+          voiceover: `${longCandidate.subject} konusunu güçlü bir çelişkiyle aç. Olayın öncesini, kritik kararları, karşı tarafı, sonucu ve Osmanlı üzerindeki uzun vadeli etkisini kronolojik ama hızlı bir anlatımla işle.`,
+          description: `${longTitle}\n\nBu bölümde olayın nedenlerini, kırılma anını ve Osmanlı üzerindeki uzun vadeli sonucunu kaynaklandırılabilir bir anlatımla inceliyoruz.\n\n#OsmanlıTarihi #Tarih`,
+          hashtags: ["#OsmanlıTarihi", "#Tarih"],
+          cta: "",
+          estimatedSeconds: 600,
+          strategyMode: longCandidate.evidenceSamples >= 5 ? "Kazananı büyüt" : "Kontrollü test",
+        });
+      }
     }
   }
 
