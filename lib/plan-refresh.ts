@@ -6,7 +6,7 @@ import type { ChannelState, PlanItem, WeeklyScheduleDay } from "./schema";
 
 const DAILY_PLAN_REFRESH_HOUR_VALUE = 21;
 const FUTURE_PLAN_REFRESH_MS = 24 * 60 * 60_000;
-const PLANNER_VERSION = 8;
+const PLANNER_VERSION = 9;
 
 type PlanningMemory = NonNullable<ChannelState["planning"]> & {
   coveredSubjects?: string[];
@@ -44,8 +44,9 @@ function planningMemory(state: ChannelState) {
 }
 
 /**
- * Sürüm 8: Gelecek planı her İstanbul gününde bir kez yeniden hesaplanır.
- * Konular kanalın kazanan kalıplarından seçilir ancak aynı tarihî olay tekrar kullanılamaz.
+ * Sürüm 9: Tüm Shorts geçmişi + Studio aktiflik saatleri kullanan yeni zamanlama
+ * modeline geçişte mevcut gelecek planı bir kez zorla yeniden hesaplanır. Sonrasında
+ * günlük 21:00 kuralı devam eder.
  */
 export function shouldRefreshFuturePlan(state: ChannelState, now = new Date()) {
   if (!state.plan.length || !state.planning?.generatedAt) return true;
