@@ -126,7 +126,7 @@ function rawMetric(
   }
   return bayesianRate(
     video.likes,
-    Math.max(video.analyticsViews || video.views, 1),
+    Math.max(video.views, 1),
     priors.Beğeni,
     1000,
   ) * 1000;
