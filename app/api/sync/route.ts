@@ -1,5 +1,6 @@
 import { buildDashboard } from "@/lib/analytics";
 import { restoreAuthFromRequest } from "@/lib/auth-cookie";
+import { persistServerAuth, recoverServerAuth } from "@/lib/auth-vault";
 import { maybeRefreshFuturePlan } from "@/lib/plan-refresh";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
@@ -43,9 +44,20 @@ export async function POST(request: Request) {
       const url = new URL(request.url);
       const automatic = url.searchParams.get("auto") === "1";
       let state = await getState();
-      const restored = restoreAuthFromRequest(state, request);
-      state = restored.state;
-      if (restored.restored) await saveState(state);
+
+      // Büyük state auth bilgisini kaybetmiş görünse bile önce küçük kalıcı OAuth kasasını,
+      // sonra aynı tarayıcıdaki şifreli cookie'yi dene. Bağlantı kararı en son verilir.
+      const serverRecovery = await recoverServerAuth(state);
+      state = serverRecovery.state;
+      const browserRecovery = restoreAuthFromRequest(state, request);
+      state = browserRecovery.state;
+
+      if (state.auth.tokens) {
+        await persistServerAuth(state.auth.tokens);
+      }
+      if (serverRecovery.recovered || browserRecovery.restored) {
+        await saveState(state);
+      }
 
       if (!state.auth.connected || !state.auth.tokens) {
         return Response.json({

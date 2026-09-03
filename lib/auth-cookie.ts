@@ -113,9 +113,11 @@ export function restoreAuthFromRequest(state: ChannelState, request: Request) {
       ...state,
       auth: {
         connected: true,
+        // Kurtarma yalnızca state bağlantısı eksik/bozuk olduğunda çalışır.
+        // Bu durumda tarayıcıdaki en son yenilenmiş token değerleri önceliklidir.
         tokens: {
-          ...payload.tokens,
           ...(state.auth.tokens || {}),
+          ...payload.tokens,
         },
       },
       sync: {
