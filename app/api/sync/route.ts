@@ -4,10 +4,10 @@ import { persistServerAuth, recoverServerAuth } from "@/lib/auth-vault";
 import { maybeRefreshFuturePlan } from "@/lib/plan-refresh";
 import { buildAdaptiveWeeklySchedule } from "@/lib/scheduling";
 import { getState, saveState, withStateLock } from "@/lib/store";
-import { bootstrapPublicYouTubeState, refreshPublicYouTubeStats, scanTrends, syncYouTube } from "@/lib/youtube-v2";
+import { bootstrapPublicYouTubeState, refreshPublicYouTubeStats } from "@/lib/youtube-v2";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 function ageOf(value: string | null | undefined) {
   if (!value) return Number.POSITIVE_INFINITY;
@@ -22,8 +22,6 @@ async function applyLivePlan(state: Awaited<ReturnType<typeof getState>>) {
     if (planned !== state) await saveState(planned);
     return planned;
   } catch (error) {
-    // Plan motoru hiçbir zaman YouTube bağlantısını veya veri senkronunu düşürmemeli.
-    // Plan hatası ayrı kaydedilir; canlı kanal verisi kullanıcıya yine döner.
     console.error("Konu planı yenilenemedi; YouTube senkronu korunuyor.", error);
     return {
       ...state,
@@ -45,19 +43,14 @@ export async function POST(request: Request) {
       const automatic = url.searchParams.get("auto") === "1";
       let state = await getState();
 
-      // Büyük state auth bilgisini kaybetmiş görünse bile önce küçük kalıcı OAuth kasasını,
-      // sonra aynı tarayıcıdaki şifreli cookie'yi dene. Bağlantı kararı en son verilir.
+      // Bağlantıyı önce kalıcı OAuth kasasından, sonra tarayıcı cookie'sinden kurtar.
       const serverRecovery = await recoverServerAuth(state);
       state = serverRecovery.state;
       const browserRecovery = restoreAuthFromRequest(state, request);
       state = browserRecovery.state;
 
-      if (state.auth.tokens) {
-        await persistServerAuth(state.auth.tokens);
-      }
-      if (serverRecovery.recovered || browserRecovery.restored) {
-        await saveState(state);
-      }
+      if (state.auth.tokens) await persistServerAuth(state.auth.tokens);
+      if (serverRecovery.recovered || browserRecovery.restored) await saveState(state);
 
       if (!state.auth.connected || !state.auth.tokens) {
         return Response.json({
@@ -67,67 +60,41 @@ export async function POST(request: Request) {
         });
       }
 
+      // İlk bağlantıda yalnızca hızlı public bootstrap yap. Ağır Analytics işi cron'a aittir.
       if (state.videos.length === 0) {
         state = await bootstrapPublicYouTubeState(state);
         state = await applyLivePlan(state);
         await saveState(state);
-        if (automatic) {
-          return Response.json({
-            skipped: false,
-            lightweight: true,
-            bootstrapped: true,
-            reason: `${state.videos.length} video konu hafızasına alındı; kanal bağlantısı hazır.`,
-            dashboard: buildDashboard(state),
-          });
-        }
+        return Response.json({
+          skipped: false,
+          lightweight: true,
+          bootstrapped: true,
+          reason: `${state.videos.length} video hafızaya alındı; canlı bağlantı hazır.`,
+          dashboard: buildDashboard(state),
+        });
       }
 
-      const fullIntervalMinutes = Math.max(
-        15,
-        Number(process.env.YOUTUBE_SYNC_INTERVAL_MINUTES || 60),
-      );
       const publicIntervalMinutes = 2;
-      const fullSyncDue =
-        ageOf(state.sync.lastSuccessfulYouTubeSync || state.sync.lastYouTubeSync) >=
-        fullIntervalMinutes * 60_000;
+      const publicSyncDue = ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
 
-      if (automatic && !fullSyncDue) {
-        const publicSyncDue = ageOf(state.sync.lastPublicStatsSync) >= publicIntervalMinutes * 60_000;
-
-        if (publicSyncDue) {
-          state = await refreshPublicYouTubeStats(state);
-          const discoveredNewUpload = state.channel.videoCount > state.videos.length;
-
-          if (!discoveredNewUpload) {
-            state = await applyLivePlan(state);
-            await saveState(state);
-            return Response.json({
-              skipped: false,
-              lightweight: true,
-              reason: "Canlı izlenmeler yenilendi; bağlantı ve kanal verisi plan motorundan bağımsız tutuluyor.",
-              dashboard: buildDashboard(state),
-            });
-          }
-        } else {
-          state = await applyLivePlan(state);
-          await saveState(state);
-          return Response.json({
-            skipped: true,
-            reason: "İki dakikalık canlı veri aralığı henüz dolmadı.",
-            dashboard: buildDashboard(state),
-          });
-        }
+      // Arka plandaki iki dakikalık tur gereksiz API çağrısı yapmasın.
+      // Manuel "Verileri yenile" ise her zaman hızlı canlı istatistiği çeker.
+      if (automatic && !publicSyncDue) {
+        state = await applyLivePlan(state);
+        await saveState(state);
+        return Response.json({
+          skipped: true,
+          lightweight: true,
+          reason: "İki dakikalık canlı veri aralığı henüz dolmadı.",
+          dashboard: buildDashboard(state),
+        });
       }
 
-      state = await syncYouTube();
+      state = await refreshPublicYouTubeStats(state);
 
-      const trendAge = ageOf(state.sync.lastTrendScan);
-      if (trendAge > 24 * 60 * 60_000) {
-        try {
-          state = await scanTrends();
-        } catch (error) {
-          console.error("Trend taraması ana senkronu engellemeden atlandı.", error);
-        }
+      // Yeni yükleme bulunduysa public video listesini hızlıca tazele.
+      if (state.channel.videoCount > state.videos.length) {
+        state = await bootstrapPublicYouTubeState(state);
       }
 
       state = await applyLivePlan(state);
@@ -135,13 +102,13 @@ export async function POST(request: Request) {
 
       return Response.json({
         skipped: false,
-        lightweight: false,
-        reason: "YouTube verileri başarıyla yenilendi; konu planı ayrı ve güvenli şekilde işlendi.",
+        lightweight: true,
+        reason: "Canlı izlenme, abone ve video istatistikleri yenilendi. Ayrıntılı Analytics her gün 21:00'da güncellenir.",
         dashboard: buildDashboard(state),
       });
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Senkron başarısız.";
+    const message = error instanceof Error ? error.message : "Canlı veri yenileme başarısız.";
     const status = message.includes("zaten çalışıyor") ? 409 : 500;
     return Response.json({ error: message }, { status });
   }
