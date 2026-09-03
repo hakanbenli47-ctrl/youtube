@@ -13,6 +13,12 @@ type ScoredSlot = {
   activityScore: number;
 };
 
+type DailyCountEvidence = {
+  date: string;
+  count: number;
+  score: number;
+};
+
 const OBJECTIVES: Objective[] = ["İzlenme", "Abone", "Beğeni"];
 const DAY_MS = 86_400_000;
 
@@ -241,10 +247,47 @@ function candidateHours(day: WeeklyScheduleDay, activity: AudienceActivityDay | 
 
 function dailyPerformanceScore(state: ChannelState, videos: VideoMetric[]) {
   if (!videos.length) return 0;
-  return median(videos.map((video) => {
+  const scores = videos.map((video) => {
     const speed = launchViews(state, video) ?? recentDailyViews(video);
     return Math.log10(speed + 10) * 25 * qualityFactor(video);
-  }));
+  });
+  const perVideo = median(scores);
+  const scaledDailyOutput = scores.reduce((total, score) => total + score, 0) /
+    Math.sqrt(Math.max(1, videos.length));
+  return perVideo * 0.72 + scaledDailyOutput * 0.28;
+}
+
+function evidenceRecencyWeight(date: string) {
+  const time = new Date(`${date}T12:00:00+03:00`).getTime();
+  if (!Number.isFinite(time)) return 0.2;
+  const daysAgo = Math.max(0, (Date.now() - time) / DAY_MS);
+  return clamp(Math.exp(-daysAgo / 28), 0.12, 1);
+}
+
+function weightedEvidenceScore(rows: DailyCountEvidence[]) {
+  if (!rows.length) return 0;
+  let weighted = 0;
+  let totalWeight = 0;
+  for (const row of rows) {
+    const weight = evidenceRecencyWeight(row.date);
+    weighted += row.score * weight;
+    totalWeight += weight;
+  }
+  return totalWeight > 0 ? weighted / totalWeight : 0;
+}
+
+function inferCurrentShortCount(rows: DailyCountEvidence[]) {
+  if (!rows.length) return 4;
+  const recent = [...rows]
+    .sort((left, right) => right.date.localeCompare(left.date))
+    .slice(0, 7);
+  const weights = new Map<number, number>();
+  recent.forEach((row, index) => {
+    const weight = Math.exp(-index / 1.8);
+    weights.set(row.count, (weights.get(row.count) || 0) + weight);
+  });
+  return [...weights.entries()]
+    .sort((left, right) => right[1] - left[1] || right[0] - left[0])[0]?.[0] || 4;
 }
 
 function chooseDailyShortCount(state: ChannelState) {
@@ -261,21 +304,32 @@ function chooseDailyShortCount(state: ChannelState) {
     byDay.set(key, [...(byDay.get(key) || []), video]);
   }
 
-  const byCount = new Map<number, number[]>();
-  for (const videos of byDay.values()) {
+  const evidence: DailyCountEvidence[] = [];
+  for (const [date, videos] of byDay.entries()) {
     const count = videos.length;
     if (count < 1 || count > 6) continue;
-    const score = dailyPerformanceScore(state, videos);
-    byCount.set(count, [...(byCount.get(count) || []), score]);
+    evidence.push({ date, count, score: dailyPerformanceScore(state, videos) });
   }
 
-  const two = byCount.get(2) || [];
-  const three = byCount.get(3) || [];
-  const twoScore = median(two);
-  const threeScore = median(three);
+  const currentCount = inferCurrentShortCount(evidence);
+  const currentRows = evidence.filter((row) => row.count === currentCount);
+  if (currentRows.length < 2) return currentCount;
+  const currentScore = weightedEvidenceScore(currentRows);
 
-  if (three.length >= 4 && (two.length < 3 || threeScore >= twoScore * 1.12)) return 3;
-  return 2;
+  let selectedCount = currentCount;
+  let selectedScore = currentScore;
+  for (const candidateCount of [currentCount - 1, currentCount + 1]) {
+    if (candidateCount < 1 || candidateCount > 6) continue;
+    const candidateRows = evidence.filter((row) => row.count === candidateCount);
+    if (candidateRows.length < 3) continue;
+    const candidateScore = weightedEvidenceScore(candidateRows);
+    const requiredLift = candidateCount < currentCount ? 1.05 : 1.08;
+    if (candidateScore >= currentScore * requiredLift && candidateScore > selectedScore) {
+      selectedCount = candidateCount;
+      selectedScore = candidateScore;
+    }
+  }
+  return selectedCount;
 }
 
 function chooseSlots(rows: ScoredSlot[], count: number) {
@@ -378,8 +432,8 @@ export function buildAdaptiveWeeklySchedule(state: ChannelState): WeeklySchedule
       shortsTimes: slots.map((slot) => slot.time),
       shortSlots: slots,
       evidence: studioAvailable
-        ? `Paylaşım sayısı son dönem cannibalization verisinden ${dailyShortCount}/gün seçildi. Saatlerde Studio'nun son 28 günlük aktif izleyici verisi %65, gerçek kanal performansı %35 ağırlıkla kullanıldı.`
-        : `Paylaşım sayısı son dönem performansından ${dailyShortCount}/gün seçildi. Studio aktiflik saatleri eklenene kadar gerçek yayın performansı kullanılıyor.`,
+        ? `Mevcut yayın düzeni yakın dönemden öğrenildi ve yalnızca komşu günlük adetler kontrollü karşılaştırıldı; bugün ${dailyShortCount}/gün seçildi. Saatlerde Studio'nun son 28 günlük aktif izleyici verisi %65, gerçek kanal performansı %35 ağırlıkla kullanıldı.`
+        : `Mevcut yayın düzeni yakın dönemden öğrenildi ve yalnızca komşu günlük adetler kontrollü karşılaştırıldı; bugün ${dailyShortCount}/gün seçildi. Studio aktiflik saatleri eklenene kadar gerçek yayın performansı kullanılıyor.`,
       confidence: studioAvailable && shorts.length >= 25
         ? "Yüksek"
         : shorts.length >= 25
