@@ -185,7 +185,10 @@ function videoAgeDays(video: VideoMetric) {
 }
 
 function objectiveValue(video: VideoMetric, objective: Objective) {
-  const retention = video.avgViewPercentage > 0 ? clamp(video.avgViewPercentage / 80, 0.65, 1.35) : 1;
+  const retentionValue = video.avgViewPercentage > 0 && (video.retention10Percent || 0) > 0
+    ? video.avgViewPercentage * 0.65 + (video.retention10Percent || 0) * 0.35
+    : video.avgViewPercentage || video.retention10Percent || 0;
+  const retention = retentionValue > 0 ? clamp(retentionValue / 80, 0.65, 1.35) : 1;
   const engaged = (video.engagedViewRate || 0) > 0 ? clamp((video.engagedViewRate || 0) / 60, 0.7, 1.3) : 1;
   const quality = Math.sqrt(retention * engaged);
   if (objective === "Abone") {
