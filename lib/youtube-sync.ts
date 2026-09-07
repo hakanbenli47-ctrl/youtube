@@ -42,11 +42,23 @@ async function assertChannel(
   const response = await youtube.channels.list({
     part: ["snippet", "statistics", "contentDetails"],
     mine: true,
+    maxResults: 50,
   });
-  const channel = response.data.items?.[0];
-  if (!channel) throw new Error("Bağlı hesapta YouTube kanalı bulunamadı.");
+  const channels = response.data.items || [];
   const expected = process.env.YOUTUBE_TARGET_CHANNEL_ID?.trim();
-  if (expected && channel.id !== expected) throw new Error("Yanlış YouTube kanalı seçildi.");
+  const channel = expected
+    ? channels.find((item) => item.id === expected)
+    : channels[0];
+
+  if (!channel) {
+    if (expected && channels.length) {
+      throw new Error(
+        "Hedef YouTube kanalı bu Google hesabında bulunamadı. Kanalı yöneten hesapla yeniden bağlan.",
+      );
+    }
+    throw new Error("Bağlı hesapta YouTube kanalı bulunamadı.");
+  }
+
   return channel;
 }
 
